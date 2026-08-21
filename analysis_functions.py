@@ -13,7 +13,6 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 
 # to evaluate model
-import lm_eval
 from lm_eval.tasks import TaskManager
 
 ## == LOAD IN MODELS == ##
