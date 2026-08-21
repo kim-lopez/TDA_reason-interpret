@@ -11,6 +11,7 @@ import networkx as nx
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
+from prettytable import PrettyTable
 
 # to evaluate model
 from lm_eval.tasks import TaskManager
@@ -59,18 +60,18 @@ def load_model(model_id = "meta-llama/Llama-3.1-8B-Instruct", device = "cuda"):
 
 # get information from dataset
 def data_label(dataset):
-    dataset_name = dataset[0]
-    data_csv = dataset[1]
-    label_q = dataset[2]
-    return dataset_name, data_csv, label_q
+    """Extracts information from dataset strings"""
+    name = dataset[0]
+    csv = dataset[1]
+    return name, csv
 
 # get information from model
 def which_model(model):
-    model_name = model[0]
-    model_id = model[1]
-    model_short = model[2]
-    model_type = model[3]
-    return model_name, model_id, model_short, model_type
+    """Extracts information from model strings"""
+    name = model[0]
+    hf_id = model[1]
+    short = model[2]
+    return name, hf_id, short
 
 # check if answer is correct
 def evaluate_model(text_cat, q_index, llm_answer):
@@ -229,27 +230,62 @@ def process_texts(texts, text_cat, model_id):
 
 ## == EXTRACT TDA FEATURES FROM MODEL == ##
 # extract top feats from models
-def get_top_feat(model, dataset, num_sen = 800, create = False, last_layer = False):
+def get_top_feat(model, dataset, create = False):
     # get labels for model
-    model_name, model_id, model_short, model_type  = which_model(model)
+    model_name, model_id, model_short  = which_model(model)
 
     # labels for dataset
-    dataset_name, data_csv, label_q = data_label(dataset)
-    data_questions = pd.read_csv(data_csv)
+    data_name, data_csv = data_label(dataset)
+    questions = pd.read_csv(data_csv)
+    
+    tda_path = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpet/{model_short}/{model_short}_{data_name}_tda.csv")
 
     # either create or load data
     if create:
-        feats_sen = data_sen_pairs[label_q][0:num_sen]
-        feats_tda = process_texts(eng_sen, model_id)
-
-        feats_tda_path = os.path.expanduser(f"~/mitll/TDA_reason-interpet/{model_short}/{model_short}_{dataset_name}_tda.csv")
-        feats_tda.to_csv(feats_tda_path, index=False)
-        print(f"Added (eng) texts from {dataset_name} for {model_short}!")
+        feats_sen = questions["prompt"]
+        feats_tda = process_texts(feats_sen, model_id)
+        feats_tda.to_csv(tda_path, index=False)
+        print(f"Added questions from {data_name} for {model_short}!")
+   
     else:
-        feats_tda = pd.read_csv(f"~/mitll/TDA_reason-interpet/{model_short}/{model_short}_{dataset_name}_tda.csv")
+        feats_tda = pd.read_csv(tda_path)
 
     return feats_tda
 
+# analyze the h0 and h1 features
+def analyze_feats(model, dataset):
+    feats_tda = get_top_feat(model, dataset)
+    
+    # isolate correct/incorrect answers
+    correct_feats = feats_tda[feats_tda["correctness"] == 1]
+    incorrect_feats = feats_tda[feats_tda["correctness"] == 0]
+
+    avg_correct_0dim = [correct_feats["Num_0dim"].mean(), correct_feats["Max_0dim"].mean(),
+                        correct_feats["Max_0dim_Minus_Second"].mean(), correct_feats["Mean_0dim"].mean(),
+                        correct_feats["betti_curve_0"].mean(), correct_feats["persistence_entropy_0"].mean()]
+    avg_correct_1dim = [correct_feats["Num_1dim"].mean(), correct_feats["Max_1dim"].mean(),
+                        correct_feats["Max_1dim_Minus_Second"].mean(), correct_feats["Mean_1dim"].mean(),
+                        correct_feats["betti_curve_1"].mean(), correct_feats["persistence_entropy_1"].mean()]
+    
+    avg_incorrect_0dim = [incorrect_feats["Num_0dim"].mean(), incorrect_feats["Max_0dim"].mean(),
+                        incorrect_feats["Max_0dim_Minus_Second"].mean(), incorrect_feats["Mean_0dim"].mean(),
+                        incorrect_feats["betti_curve_0"].mean(), incorrect_feats["persistence_entropy_0"].mean()]
+    avg_incorrect_1dim = [incorrect_feats["Num_1dim"].mean(), incorrect_feats["Max_1dim"].mean(),
+                        incorrect_feats["Max_1dim_Minus_Second"].mean(), incorrect_feats["Mean_1dim"].mean(),
+                        incorrect_feats["betti_curve_1"].mean(), incorrect_feats["persistence_entropy_1"].mean()]
+    
+
+    # display info
+    table = PrettyTable()
+    table.field_names = ["label", "num_feat", "max_feat", "max_feat_minus_second", "mean_feat", "betti_curve", "persistence_entropy"]
+    table.add_row = ["correct_0dim"] + avg_correct_0dim
+    table.add_row = ["correct_1dim"] + avg_correct_1dim
+    table.add_row = ["incorrect_0dim"] + avg_incorrect_0dim
+    table.add_row = ["incorrect_1dim"] + avg_incorrect_1dim
+
+    print(table)
+
+    return 0
 
 
 ## == old functions for extracting attention + embeddings == ##
