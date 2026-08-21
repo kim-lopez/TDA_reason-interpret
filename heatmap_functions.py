@@ -136,105 +136,105 @@ def get_desc_nltk(data):
 
 
 ## == EXTRACT LINGUISTIC FEATURES == ##
-def get_ling_feat(dataset, num_sen = 500, spa = False, create = False):
+def get_ling_feat(dataset, create = False):
     # get dataset labels
-    dataset_name, data_csv, label_eng, label_spa = data_label(dataset)
-    sen_pairs = pd.read_csv(data_csv)
+    data_name, data_csv = data_label(dataset)
+    df_prompts = pd.read_csv(data_csv)
+    ling_feat_path = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpet/ling_feat/{data_name}_ling_feat.csv")
 
     if create:
-        eng_sen = sen_pairs[label_eng][0:num_sen]
-        eng_feat = get_desc_nltk(eng_sen)
+        prompt = df_prompts["prompt"]
+        ling_feat = get_desc_nltk(prompt)
         
-        eng_feat_path = os.path.expanduser(f"~/mitll/TDA_reason-interpet/ling_feat/{dataset_name}_eng_nlp.csv")
-        eng_feat.to_csv(eng_feat_path)
-        print(f"Added ling features for (eng) texts from {dataset_name}!")
+        ling_feat.to_csv(ling_feat_path)
+        print(f"Added ling features for questions from {data_name}!")
+    
     else:
-        eng_feat = pd.read_csv(f"~/mitll/TDA_reason-interpet/ling_feat/{dataset_name}_eng_nlp.csv")
+        ling_feat = pd.read_csv(ling_feat_path)
 
-    spa_feat = ""
-    if (spa and create):
-        spa_sen = sen_pairs[label_spa][0:num_sen]
-        spa_feat = get_desc_nltk(spa_sen)
-
-        spa_feat_path = os.path.expanduser(f"~/mitll/TDA_reason-interpet/ling_feat/{dataset_name}_spa_nlp.csv")
-        spa_feat.to_csv(spa_feat_path)
-        print(f"Added ling features for (spa) texts from {dataset_name}!")
-    elif spa:
-        spa_feat = pd.read_csv(f"~/mitll/TDA_reason-interpet/ling_feat/{dataset_name}_spa_nlp.csv")
-
-    return eng_feat, spa_feat
+    return ling_feat
 
 
 ## == CORRELATION HEATMAP == ##
-def make_heatmap(dataset, model_id, linguistic_label = linguistic_labels[0], tda_label = tda_labels[0], save = True, extra_label = "", spa = False, red = False):
+def make_heatmap(dataset, model_id, linguistic_label = linguistic_labels[0], tda_label = tda_labels[0], save = True):
     # get the topological and linguistic features
-    top_feat, _ = get_top_feat(model_id, "a", dataset)
-    ling_feat, _ = get_ling_feat(dataset, model_id)
-
-    if spa:
-        top_feat, _ = get_top_feat(model_id, "a", dataset, spa = True)
-        ling_feat, _ = get_ling_feat(model_id, dataset, spa = True)
+    top_feat = get_top_feat(model_id, dataset)
+    ling_feat = get_ling_feat(dataset, model_id)
+    
+    # create masks for csvs
+    correct = top_feat["correctness"] == 1
+    incorrect = top_feat["correctness"] == 0
     
     # focus the heatmap
-    focus_top_feat = top_feat[tda_label[1]]
-    focus_ling_feat = ling_feat[linguistic_label[1]]
+    correct_top_feat = top_feat[correct][tda_label[1]]
+    correct_ling_feat = ling_feat[correct][linguistic_label[1]]
+
+    incorrect_top_feat = top_feat[incorrect][tda_label[1]]
+    incorrect_ling_feat = ling_feat[incorrect][linguistic_label[1]]
+
 
     # convert features to numpy
-    tda_features = focus_top_feat.to_numpy()
-    linguistic_features = focus_ling_feat.to_numpy()
+    tda_features_correct = correct_top_feat.to_numpy()
+    linguistic_features_correct = correct_ling_feat.to_numpy()
+
+    tda_features_incorrect = incorrect_top_feat.to_numpy()
+    linguistic_features_incorrect = incorrect_ling_feat.to_numpy()
+
+    # randomly sample 100 entries from each
+    srs = np.random.default_rng(8)
+    srs_rows = srs.choice(tda_filtered.shape[0], size=100, replace=False)
+
+    correct_top_feat = correct_top_feat[srs_rows]
+    correct_ling_feat = correct_ling_feat[srs_rows]
+
+    incorrect_top_feat = incorrect_top_feat[srs_rows]
+    incorrect_ling_feat = incorrect_ling_feat[srs_rows]
 
     # compute pairwise distance correlation matrix
-    corr_matrix = np.zeros((tda_features.shape[1], linguistic_features.shape[1]))
-
-    # determine significance threshold
-    threshold = 0.6
-    num_sig = 0
-    sum_corr = 0
+    corr_matrix_correct = np.zeros((tda_features.shape[1], linguistic_features.shape[1]))
+    corr_matrix_incorrect = np.zeros((tda_features.shape[1], linguistic_features.shape[1]))
     
-    for i in range(tda_features.shape[1]):
-        for j in range(linguistic_features.shape[1]):
-            corr = dcor.distance_correlation(tda_features[:, i], linguistic_features[:, j])
-            if np.isnan(corr):
-                corr = np.nan_to_num(corr)
-            corr_matrix[i, j] = corr
-            sum_corr += corr
-            if corr > threshold:
-                num_sig += 1
+    for i in range(correct_top_feat.shape[1]):
+        for j in range(correct_ling_feat.shape[1]):
+            corr_correct = dcor.distance_correlation(correct_top_feat[:, i], correct_ling_feat[:, j])
+            corr_incorrect = dcor.distance_correlation(incorrect_top_feat[:, i], incorrect_ling_feat[:, j])
+            if np.isnan(corr_correct):
+                corr_correct = np.nan_to_num(corr_correct)
+            corr_correct[i, j] = corr_correct
 
-    # average percent significant
-    num_cells = tda_features.shape[1] * linguistic_features.shape[1]
-    avg_corr = sum_corr / num_cells
-    per_sig = num_sig / num_cells
-    print("The percent of significant correlations is", per_sig, "with an average correlation of", avg_corr)
+            if np.isnan(corr_incorrect):
+                corr_incorrect = np.nan_to_num(corr_incorrect)
+            corr_matrix_incorrect[i, j] = corr_incorrect
 
-    # plot heatmap
+    # get labels for title!
+    dataset_name, _, = data_label(dataset)
+    _, _, model_short = which_model(model_id)
+
+    # plot heatmap correct
     plt.figure(figsize=(len(linguistic_label[1]), len(tda_label[1])))
     sns.set_theme(font_scale=1.5) # make label size bigger
-    sns.heatmap(corr_matrix, annot=True, cmap="coolwarm",
+    sns.heatmap(corr_matrix_correct, annot=True, cmap="coolwarm",
                 xticklabels= linguistic_label[1],
                 yticklabels= tda_label[1],
-                annot_kws={"fontsize": 15}
-                )
-    # get labels for title!
-    dataset_name, _, _, _ = data_label(dataset)
-    _, _, model_short, _ = which_model(model_id)
+                annot_kws={"fontsize": 15})
+    plt.title(f"{dataset_name}: {tda_label[0]} vs {linguistic_label[0]} ({model_short}, correct)", fontsize=23)
 
-    plt.title(f"{dataset_name}: {tda_label[0]} vs {linguistic_label[0]} ({model_short})", fontsize=23)
-
-    if red:
-        # find highest correlated values
-        red_threshold=0.5
-        red_cells = [(tda_label[1][i], linguistic_label[1][j], corr_matrix[i, j]) 
-                    for i in range(corr_matrix.shape[0])
-                    for j in range(corr_matrix.shape[1])
-                    if (corr_matrix[i, j] > red_threshold)]
-
-        print("Red cells (row, col, value):")
-        for cell in red_cells:
-            print(cell)
+    # plot heatmap incorrect
+    plt.figure(figsize=(len(linguistic_label[1]), len(tda_label[1])))
+    sns.set_theme(font_scale=1.5) # make label size bigger
+    sns.heatmap(corr_matrix_incorrect, annot=True, cmap="coolwarm",
+                xticklabels= linguistic_label[1],
+                yticklabels= tda_label[1],
+                annot_kws={"fontsize": 15})
+    plt.title(f"{dataset_name}: {tda_label[0]} vs {linguistic_label[0]} ({model_short}, incorrect)", fontsize=23)
+    
+    # save the heatmaps as pdf files
     if save:
-        eng_path = os.path.expanduser(f"~/mitll/TDA_reason-interpet/{dataset_name}/{model_short}_{dataset_name}_eng_corr{extra_label}.pdf")
-        plt.savefig(eng_path)
+        path_correct = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpet/{dataset_name}/{model_short}_{dataset_name}_correct.pdf")
+        plt.savefig(path_correct)
+        
+        path_incorrect = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpet/{dataset_name}/{model_short}_{dataset_name}_incorrect.pdf")
+        plt.savefig(path_incorrect)
         
     plt.show()
 
