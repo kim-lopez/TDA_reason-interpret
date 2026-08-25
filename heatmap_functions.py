@@ -20,6 +20,10 @@ import gc
 import math
 from scipy import stats
 
+# for shared functions
+import pandas as pd
+import analysis_functions as topo
+
 
 ## == EXTRACT LINGUISTIC FEATURES == ##
 # load nlp model
@@ -138,9 +142,9 @@ def get_desc_nltk(data):
 ## == EXTRACT LINGUISTIC FEATURES == ##
 def get_ling_feat(dataset, create = False):
     # get dataset labels
-    data_name, data_csv = data_label(dataset)
+    data_name, data_csv = topo.data_label(dataset)
     df_prompts = pd.read_csv(data_csv)
-    ling_feat_path = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpet/ling_feat/{data_name}_ling_feat.csv")
+    ling_feat_path = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpret/ling_feat/{data_name}_ling_feat.csv")
 
     if create:
         prompt = df_prompts["prompt"]
@@ -156,7 +160,7 @@ def get_ling_feat(dataset, create = False):
 
 
 ## == CORRELATION HEATMAP == ##
-def make_heatmap(dataset, model_id, linguistic_label = linguistic_labels[0], tda_label = tda_labels[0], save = True):
+def make_heatmap(dataset, model_id, linguistic_label, tda_label, save = True):
     # get the topological and linguistic features
     top_feat = get_top_feat(model_id, dataset)
     ling_feat = get_ling_feat(dataset, model_id)
@@ -207,7 +211,7 @@ def make_heatmap(dataset, model_id, linguistic_label = linguistic_labels[0], tda
             corr_matrix_incorrect[i, j] = corr_incorrect
 
     # get labels for title!
-    dataset_name, _, = data_label(dataset)
+    dataset_name, _, = topo.data_label(dataset)
     _, _, model_short = which_model(model_id)
 
     # plot heatmap correct
@@ -230,10 +234,10 @@ def make_heatmap(dataset, model_id, linguistic_label = linguistic_labels[0], tda
     
     # save the heatmaps as pdf files
     if save:
-        path_correct = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpet/{dataset_name}/{model_short}_{dataset_name}_correct.pdf")
+        path_correct = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpret/{dataset_name}/{model_short}_{dataset_name}_correct.pdf")
         plt.savefig(path_correct)
         
-        path_incorrect = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpet/{dataset_name}/{model_short}_{dataset_name}_incorrect.pdf")
+        path_incorrect = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpret/{dataset_name}/{model_short}_{dataset_name}_incorrect.pdf")
         plt.savefig(path_incorrect)
         
     plt.show()
@@ -242,13 +246,13 @@ def make_heatmap(dataset, model_id, linguistic_label = linguistic_labels[0], tda
 
 
 ## == p-VALUE HEATMAP == ##
-def make_pval_heatmap(dataset, model_id, linguistic_label = linguistic_labels[0], tda_label = tda_labels[0], save = True, extra_label = "", spa = False, show = True):
+def make_pval_heatmap(dataset, model_id, linguistic_label, tda_label, save = True, extra_label = "", spa = False, show = True):
     # get the topological and linguistic features
     top_feat, _ = get_top_feat(model_id, "a", dataset)
     ling_feat, _ = get_ling_feat(dataset, model_id)
 
     # get labels for title!
-    dataset_name, data_csv, eng_label, _ = data_label(dataset)
+    dataset_name, data_csv, eng_label = topo.data_label(dataset)
     _, _, model_short, _ = which_model(model_id)
 
     if spa:
@@ -306,7 +310,7 @@ def make_pval_heatmap(dataset, model_id, linguistic_label = linguistic_labels[0]
     plt.title(f"{dataset_name}: {tda_label[0]} vs {linguistic_label[0]} p-values ({model_short})", fontsize=23)
 
     if save:
-        eng_path = os.path.expanduser(f"~/mitll/TDA_reason-interpet/{model_short}/{dataset_name}/{model_short}_{dataset_name}_eng_pval{extra_label}.pdf")
+        eng_path = os.path.expanduser(f"~/mitll/TDA_reason-interpret/{model_short}/{dataset_name}/{model_short}_{dataset_name}_eng_pval{extra_label}.pdf")
         plt.savefig(eng_path)
 
     if show: 
