@@ -1,6 +1,7 @@
 ## == IMPORTS == ##
 # for attention extraction + analysis
 import torch
+import os
 from transformers import AutoModelForCausalLM, AutoTokenizer, AutoModel, AutoModelForSequenceClassification
 import numpy as np
 import pandas as pd
@@ -12,6 +13,7 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from prettytable import PrettyTable
+import re
 
 # to evaluate model
 from lm_eval.tasks import TaskManager
@@ -28,22 +30,21 @@ def load_model(model_id = "meta-llama/Llama-3.1-8B-Instruct", device = "cuda"):
     # Set padding token if not set
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    
     try:
-        # for encoder-only models (BERT, RoBERTa, etc.)
-        model = AutoModel.from_pretrained(
-            model_id, 
+        # For causal LM models (Llama, Qwen, GPT, etc.)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
             output_attentions=True,
-            torch_dtype=torch.float16 if device == "cuda" else torch.float32
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            device_map="auto" if device == "cuda" else None
         )
     except Exception:
         try:
-            # For causal LM models (Llama, Qwen, GPT, etc.)
-            model = AutoModelForCausalLM.from_pretrained(
-                model_id,
+            # for encoder-only models (BERT, RoBERTa, etc.)
+            model = AutoModel.from_pretrained(
+                model_id, 
                 output_attentions=True,
-                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-                device_map="auto" if device == "cuda" else None
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32
             )
         except Exception:
             # for seq2seq models (BART, T5, etc.)
@@ -75,18 +76,19 @@ def which_model(model):
 
 # check if answer is correct
 def evaluate_model(text_cat, q_index, llm_answer):
-    task_dict = TaskManager.load_task_or_group(task_list=[text_cat])
-    task_obj = task_dict["tasks"][text_cat]
+    task_manager = TaskManager()
+    task_dict = task_manager.load_task_or_group(task_list=[text_cat])
+    task_obj = task_dict[text_cat]
 
-    docs = list(task_obj.eval_docs())
+    docs = list(task_obj.eval_docs)
     doc = docs[q_index]
 
-    if task.startswith("mmlu_"):
+    if text_cat.startswith("mmlu_"):
         question = doc["question"]
         choices = doc["choices"]
         correct_index = int(doc["answer"])
 
-    elif task == "hellaswag":
+    elif text_cat == "hellaswag":
         question = doc["ctx"]
         choices = doc["endings"]
         correct_index = int(doc["label"])
@@ -94,17 +96,18 @@ def evaluate_model(text_cat, q_index, llm_answer):
     else:
         raise ValueError(f"Unsupported task: {task}")
 
-    answer = llm_answer.strip().upper()
-
-    if answer in "ABCD":
-        predicted_index = ord(answer) - ord("A")
-    elif answer in ("0", "1", "2", "3"):
-        predicted_index = int(answer)
-    else:
-        raise ValueError(
-            f"Expected A/B/C/D or 0/1/2/3, got: {llm_answer!r}"
-        )
+    match = re.search(r"Answer:\s*([A-D])|([A-D])\s*$", llm_answer.strip(), re.IGNORECASE)
     
+    if match:
+        extracted = (match.group(1) or match.group(2)).upper()
+        predicted_index = ord(extracted) - ord('A')
+    else:
+        cleaned = llm_answer.strip()
+        if cleaned in ["0", "1", "2", "3"]:
+            predicted_index = int(cleaned)
+        else:
+            raise ValueError(f"Expected A/B/C/D or 0/1/2/3, got: {llm_answer!r}")
+
     correctness = (predicted_index == correct_index)
     
     return correctness
@@ -140,16 +143,18 @@ def get_attention(text, model, tokenizer):
     inputs = tokenizer(text, return_tensors='pt', truncation=True, padding=True, max_length=512).to(model.device)
     with torch.no_grad():
         outputs = model.generate(
-            **inputs, 
-            max_new_tokens=max_new_tokens,
+            **inputs,
+            max_new_tokens=200,
             pad_token_id=tokenizer.eos_token_id,
             return_dict_in_generate=True,
             output_attentions=True
         )
     answer = tokenizer.decode(outputs.sequences[0], skip_special_tokens=True)
-    attention_matrices = torch.stack(outputs.attentions).mean(dim=(0, 2)).squeeze(0).cpu().numpy()   # torch.stack(outputs.attentions).mean(dim=0).squeeze().cpu().numpy()
+    
+    # get average attention across heads
+    attention_matrices = torch.stack(outputs.attentions[0]).mean(dim=(1,3)).squeeze(0).cpu().numpy()
     avg_attention = np.mean(attention_matrices, axis=0)
-    return avg_attention, answer # Averaging across heads
+    return avg_attention, answer
 
 def build_graph(attention_matrix, threshold=0.1):
     graph = nx.Graph()
@@ -165,12 +170,12 @@ def build_graph(attention_matrix, threshold=0.1):
 # aquire TDA features from model
 def compute_tda_features(graph):
     adjacency_matrix = nx.to_numpy_array(graph)
-    diagrams = ripser(adjacency_matrix, maxdim=1)['dgms']
+    diagrams = ripser(adjacency_matrix, distance_matrix=True, maxdim=1)['dgms']
 
     h0 = diagrams[0]
     h1 = diagrams[1] if len(diagrams) > 1 else np.array([])
 
-    num_h0 = geek.count_nonzero(np.round(h0)) #count_nonzero(h0) # len(h0)
+    num_h0 = np.count_nonzero(np.round(h0)) #count_nonzero(h0) # len(h0)
     highest_h0 = find_highest_finite_value_comprehension(h0[:, 1] - h0[:, 0]) if num_h0 > 0 else 0
     Second_highest_h0 = get_second_value_ignoring_inf(h0[:, 1] - h0[:, 0]) if num_h0 > 1 else 0
     highest_minus_second_h0 = highest_h0 - Second_highest_h0 if num_h0 > 1 else 0
@@ -181,7 +186,7 @@ def compute_tda_features(graph):
     # print("mean h0: ", mean_h0)
 
 
-    num_h1 = geek.count_nonzero(np.round(h1))
+    num_h1 = np.count_nonzero(np.round(h1))
     highest_h1 = find_highest_finite_value_comprehension(h1[:, 1] - h1[:, 0]) if num_h1 > 0 else 0
     second_highest_h1 = get_second_value_ignoring_inf(h1[:, 1] - h1[:, 0]) if num_h1 > 1 else 0
     highest_minus_second_h1 = highest_h1 - second_highest_h1 if num_h1 > 1 else 0
@@ -207,24 +212,83 @@ def compute_tda_features(graph):
     return [num_h0, highest_h0, highest_minus_second_h0, mean_h0, betti_curve_0, persistence_entropy_0,
             num_h1, highest_h1, highest_minus_second_h1, mean_h1, betti_curve_1, persistence_entropy_1]
 
-# analyzes text from model
+# # analyzes text from model
+# def process_texts(texts, text_cat, model_id):
+#     model, tokenizer = load_model(model_id)
+#     data = []
+#     index = 0
+#     for text in tqdm(texts):
+#         attention_matrix, answer = get_attention(text, model, tokenizer)
+#         graph = build_graph(attention_matrix)
+#         tda_features = compute_tda_features(graph)
+#         correctness = evaluate_model(text_cat, index, answer)
+        
+#         if isinstance(tda_features, dict):
+#             row = list(tda_features.values()) + [correctness]
+#         elif isinstance(tda_features, (list, tuple)):
+#             row = list(tda_features) + [correctness]
+#         else:
+#             # If tda_features is a numpy arraySSS
+#             row = tda_features.tolist() + [correctness]
+
+#         data.append(row)
+        
+#         index += 1
+
+#     columns = ["Num_0dim", "Max_0dim", "Max_0dim_Minus_Second", "Mean_0dim", "betti_curve_0", "persistence_entropy_0",
+#                "Num_1dim", "Max_1dim", "Max_1dim_Minus_Second", "Mean_1dim", "betti_curve_1", "persistence_entropy_1",
+#                "correctness"]
+#     return pd.DataFrame(data, columns=columns)
+
 def process_texts(texts, text_cat, model_id):
     model, tokenizer = load_model(model_id)
     data = []
-    index = 0
-    for text in tqdm(texts):
+
+    for index, text in enumerate(tqdm(texts)):
         attention_matrix, answer = get_attention(text, model, tokenizer)
+
+        # DEBUG CHECK: Ensure attention matrix is non-zero
+        if (
+            attention_matrix is None
+            or np.all(attention_matrix == 0)
+            or np.isnan(attention_matrix).all()
+        ):
+            print(f"[Warning] Empty attention matrix at index {index}")
+
         graph = build_graph(attention_matrix)
         tda_features = compute_tda_features(graph)
-        data.append(tda_features)
-
         correctness = evaluate_model(text_cat, index, answer)
-        data.append(answer)
-        index += 1
 
-    columns = ["Num_0dim", "Max_0dim", "Max_0dim_Minus_Second", "Mean_0dim", "betti_curve_0", "persistence_entropy_0",
-               "Num_1dim", "Max_1dim", "Max_1dim_Minus_Second", "Mean_1dim", "betti_curve_1", "persistence_entropy_1",
-               "corectness"]
+        # Format TDA features properly into a list
+        if isinstance(tda_features, dict):
+            row_features = list(tda_features.values())
+        elif isinstance(tda_features, (list, tuple)):
+            row_features = list(tda_features)
+        elif hasattr(tda_features, "tolist"):
+            row_features = tda_features.tolist()
+        else:
+            row_features = [tda_features]
+
+        # Combine into EXACTLY ONE row per loop iteration
+        row = row_features + [correctness]
+        data.append(row)
+
+    columns = [
+        "Num_0dim",
+        "Max_0dim",
+        "Max_0dim_Minus_Second",
+        "Mean_0dim",
+        "betti_curve_0",
+        "persistence_entropy_0",
+        "Num_1dim",
+        "Max_1dim",
+        "Max_1dim_Minus_Second",
+        "Mean_1dim",
+        "betti_curve_1",
+        "persistence_entropy_1",
+        "correctness",
+    ]
+
     return pd.DataFrame(data, columns=columns)
 
 
@@ -238,12 +302,12 @@ def get_top_feat(model, dataset, create = False):
     data_name, data_csv = data_label(dataset)
     questions = pd.read_csv(data_csv)
     
-    tda_path = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpet/{model_short}/{model_short}_{data_name}_tda.csv")
+    tda_path = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpret/{model_short}/{model_short}_{data_name}_tda.csv")
 
     # either create or load data
     if create:
         feats_sen = questions["prompt"]
-        feats_tda = process_texts(feats_sen, model_id)
+        feats_tda = process_texts(feats_sen, data_name, model_id)
         feats_tda.to_csv(tda_path, index=False)
         print(f"Added questions from {data_name} for {model_short}!")
    
@@ -274,7 +338,9 @@ def analyze_feats(model, dataset):
                         incorrect_feats["Max_1dim_Minus_Second"].mean(), incorrect_feats["Mean_1dim"].mean(),
                         incorrect_feats["betti_curve_1"].mean(), incorrect_feats["persistence_entropy_1"].mean()]
     
-
+    avg_diff_0dim = [corr0 - incorr0 for corr0, incorr0 in zip(avg_correct_0dim, avg_incorrect_0dim)]
+    avg_diff_1dim = [corr1 - incorr1 for corr1, incorr1 in zip(avg_correct_1dim, avg_incorrect_1dim)]
+    
     # display info
     table = PrettyTable()
     table.field_names = ["label", "num_feat", "max_feat", "max_feat_minus_second", "mean_feat", "betti_curve", "persistence_entropy"]
@@ -282,6 +348,8 @@ def analyze_feats(model, dataset):
     table.add_row = ["correct_1dim"] + avg_correct_1dim
     table.add_row = ["incorrect_0dim"] + avg_incorrect_0dim
     table.add_row = ["incorrect_1dim"] + avg_incorrect_1dim
+    table.add_row = ["diff_0dim"] + avg_diff_0dim
+    table.add_row = ["diff_1dim"] + avg_diff_1dim
 
     print(table)
 
