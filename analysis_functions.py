@@ -13,7 +13,9 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.impute import SimpleImputer
 from prettytable import PrettyTable
+import matplotlib.pyplot as plt
 import re
+from persim import wasserstein_matching
 
 # to evaluate model
 from lm_eval.tasks import TaskManager
@@ -76,27 +78,8 @@ def which_model(model):
     return name, hf_id, short
 
 # check if answer is correct
-def evaluate_model(text_cat, q_index, llm_answer):
-    task_manager = TaskManager()
-    task_dict = task_manager.load_task_or_group(task_list=[text_cat])
-    task_obj = task_dict[text_cat]
-
-    docs = list(task_obj.eval_docs)
-    doc = docs[q_index]
-
-    if text_cat.startswith("mmlu_"):
-        question = doc["question"]
-        choices = doc["choices"]
-        correct_index = int(doc["answer"])
-
-    elif text_cat == "hellaswag":
-        question = doc["ctx"]
-        choices = doc["endings"]
-        correct_index = int(doc["label"])
-
-    else:
-        raise ValueError(f"Unsupported task: {text_cat}")
-
+def evaluate_model(real_answer, llm_answer):
+    correct_index = int(real_answer)
     match = re.search(r"Answer:\s*([A-D])|([A-D])\s*$", llm_answer.strip(), re.IGNORECASE)
     
     if match:
@@ -107,7 +90,8 @@ def evaluate_model(text_cat, q_index, llm_answer):
         if cleaned in ["0", "1", "2", "3"]:
             predicted_index = int(cleaned)
         else:
-            raise ValueError(f"Expected A/B/C/D or 0/1/2/3, got: {llm_answer!r}")
+            # raise ValueError(f"Expected A/B/C/D or 0/1/2/3, got: {llm_answer!r}")
+            return False
 
     correctness = (predicted_index == correct_index)
     
@@ -656,7 +640,8 @@ def compute_tda_features(distance_matrix):
     )
 
     return [num_h0, max_h0, max_minus_second_h0, mean_h0, betti_curve_0, persistence_entropy_0,
-            num_h1, max_h1, max_minus_second_h1, mean_h1, betti_curve_1, persistence_entropy_1]
+            num_h1, max_h1, max_minus_second_h1, mean_h1, betti_curve_1, persistence_entropy_1,
+            diagrams]
 
 
 # # analyzes text from model
@@ -687,12 +672,14 @@ def compute_tda_features(distance_matrix):
 #                "correctness"]
 #     return pd.DataFrame(data, columns=columns)
 
-def process_texts(texts, text_cat, model_id):
+def process_texts(texts, answer, model_id):
     model, tokenizer = load_model(model_id)
     data = []
 
     for index, text in enumerate(tqdm(texts)):
-        attention_matrix, answer = get_attention(text, model, tokenizer)
+        attention_matrix, llm_answer = get_attention(text, model, tokenizer)
+        real_answer = answer[index]
+        print("answer: ", real_answer)
 
         # DEBUG CHECK: Ensure attention matrix is non-zero
         if (
@@ -712,10 +699,10 @@ def process_texts(texts, text_cat, model_id):
         # print("Distance matrix:", graph.shape)
         # print("Distance min:", graph.min())
         # print("Distance max:", graph.max())
-    
-        tda_features = compute_tda_features(graph)
-        correctness = evaluate_model(text_cat, index, answer)
 
+        tda_features = compute_tda_features(graph)
+        correctness = evaluate_model(real_answer, llm_answer)
+        
         # Format TDA features properly into a list
         if isinstance(tda_features, dict):
             row_features = list(tda_features.values())
@@ -731,19 +718,9 @@ def process_texts(texts, text_cat, model_id):
         data.append(row)
 
     columns = [
-        "Num_0dim",
-        "Max_0dim",
-        "Max_0dim_Minus_Second",
-        "Mean_0dim",
-        "betti_curve_0",
-        "persistence_entropy_0",
-        "Num_1dim",
-        "Max_1dim",
-        "Max_1dim_Minus_Second",
-        "Mean_1dim",
-        "betti_curve_1",
-        "persistence_entropy_1",
-        "correctness",
+        "Num_0dim", "Max_0dim", "Max_0dim_Minus_Second", "Mean_0dim", "betti_curve_0", "persistence_entropy_0",
+        "Num_1dim", "Max_1dim", "Max_1dim_Minus_Second", "Mean_1dim", "betti_curve_1", "persistence_entropy_1",
+        "diagrams", "correctness",
     ]
 
     return pd.DataFrame(data, columns=columns)
@@ -764,7 +741,12 @@ def get_top_feat(model, dataset, create = False):
     # either create or load data
     if create:
         feats_sen = questions["prompt"]
-        feats_tda = process_texts(feats_sen, data_name, model_id)
+        answer = []
+        if data_name == "hellaswag":
+            answer = questions["label"]
+        else:
+            answer = questions["answer"]
+        feats_tda = process_texts(feats_sen, answer, model_id)
         feats_tda.to_csv(tda_path, index=False)
         print(f"Added questions from {data_name} for {model_short}!")
    
@@ -773,43 +755,212 @@ def get_top_feat(model, dataset, create = False):
 
     return feats_tda
 
-# analyze the h0 and h1 features
-def analyze_feats(model, dataset):
+# sample from topo features
+def rand_sample(model, dataset, random_state=8):
     feats_tda = get_top_feat(model, dataset)
     
     # isolate correct/incorrect answers
     correct_feats = feats_tda[feats_tda["correctness"] == 1]
     incorrect_feats = feats_tda[feats_tda["correctness"] == 0]
 
+    correct_feats = correct_feats.sample(n=100, random_state)
+    incorrect_feats = incorrect_feats.sample(n=100, random_state)
+
+    return correct_feats, incorrect_feats
+
+# analyze the h0 and h1 features
+def analyze_feats(model, dataset):
+    correct_feats, incorrect_feats = rand_sample(model, dataset)
+
+
     avg_correct_0dim = [correct_feats["Num_0dim"].mean(), correct_feats["Max_0dim"].mean(),
                         correct_feats["Max_0dim_Minus_Second"].mean(), correct_feats["Mean_0dim"].mean(),
                         correct_feats["betti_curve_0"].mean(), correct_feats["persistence_entropy_0"].mean()]
+    std_correct_0dim = [correct_feats["Num_0dim"].sem(), correct_feats["Max_0dim"].sem(),
+                        correct_feats["Max_0dim_Minus_Second"].sem(), correct_feats["Mean_0dim"].sem(),
+                        correct_feats["betti_curve_0"].sem(), correct_feats["persistence_entropy_0"].sem()]
+    
     avg_correct_1dim = [correct_feats["Num_1dim"].mean(), correct_feats["Max_1dim"].mean(),
                         correct_feats["Max_1dim_Minus_Second"].mean(), correct_feats["Mean_1dim"].mean(),
                         correct_feats["betti_curve_1"].mean(), correct_feats["persistence_entropy_1"].mean()]
+    std_correct_1dim = [correct_feats["Num_1dim"].sem(), correct_feats["Max_1dim"].sem(),
+                        correct_feats["Max_1dim_Minus_Second"].sem(), correct_feats["Mean_1dim"].sem(),
+                        correct_feats["betti_curve_1"].sem(), correct_feats["persistence_entropy_1"].sem()]
     
     avg_incorrect_0dim = [incorrect_feats["Num_0dim"].mean(), incorrect_feats["Max_0dim"].mean(),
                         incorrect_feats["Max_0dim_Minus_Second"].mean(), incorrect_feats["Mean_0dim"].mean(),
                         incorrect_feats["betti_curve_0"].mean(), incorrect_feats["persistence_entropy_0"].mean()]
+    std_incorrect_0dim = [incorrect_feats["Num_0dim"].sem(), incorrect_feats["Max_0dim"].sem(),
+                        incorrect_feats["Max_0dim_Minus_Second"].sem(), incorrect_feats["Mean_0dim"].sem(),
+                        incorrect_feats["betti_curve_0"].sem(), incorrect_feats["persistence_entropy_0"].sem()]
+    
     avg_incorrect_1dim = [incorrect_feats["Num_1dim"].mean(), incorrect_feats["Max_1dim"].mean(),
                         incorrect_feats["Max_1dim_Minus_Second"].mean(), incorrect_feats["Mean_1dim"].mean(),
                         incorrect_feats["betti_curve_1"].mean(), incorrect_feats["persistence_entropy_1"].mean()]
+    std_incorrect_1dim = [incorrect_feats["Num_1dim"].sem(), incorrect_feats["Max_1dim"].sem(),
+                        incorrect_feats["Max_1dim_Minus_Second"].sem(), incorrect_feats["Mean_1dim"].sem(),
+                        incorrect_feats["betti_curve_1"].sem(), incorrect_feats["persistence_entropy_1"].sem()]
     
     avg_diff_0dim = [corr0 - incorr0 for corr0, incorr0 in zip(avg_correct_0dim, avg_incorrect_0dim)]
     avg_diff_1dim = [corr1 - incorr1 for corr1, incorr1 in zip(avg_correct_1dim, avg_incorrect_1dim)]
     
     # display info
     table = PrettyTable()
-    table.field_names = ["label", "num_feat", "max_feat", "max_feat_minus_second", "mean_feat", "betti_curve", "persistence_entropy"]
+    feature_names = ["num_feat", "max_feat", "max_feat_minus_second", "mean_feat", "betti_curve", "persistence_entropy"]
+    filter_names = ["max_feat", "max_feat_minus_second", "mean_feat"]
+    table.field_names = ["label"] + feature_names
     table.add_row(["correct_0dim"] + avg_correct_0dim)
+    table.add_row(["correct_0dim_stdv"] + std_correct_0dim)
+    
     table.add_row(["correct_1dim"] + avg_correct_1dim)
+    table.add_row(["correct_1dim_std"] + std_correct_1dim)
+    
     table.add_row(["incorrect_0dim"] + avg_incorrect_0dim)
+    table.add_row(["incorrect_0dim_std"] + std_incorrect_0dim)
+    
     table.add_row(["incorrect_1dim"] + avg_incorrect_1dim)
+    table.add_row(["incorrect_1dim"] + std_incorrect_1dim)
+    
     table.add_row(["diff_0dim"] + avg_diff_0dim)
     table.add_row(["diff_1dim"] + avg_diff_1dim)
 
     print(table)
+
+    # Plot
+    x = np.arange(len(filter_names))
+    width = 0.35
+
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+
+    # -------------------------
+    # 0-dimensional features
+    # -------------------------
+    axes[0].bar(
+        x - width / 2,
+        avg_correct_0dim[1:4],
+        width,
+        yerr=std_correct_0dim[1:4],
+        capsize=4,
+        label="Correct",
+        color="steelblue",
+        alpha=0.85
+    )
+
+    axes[0].bar(
+        x + width / 2,
+        avg_incorrect_0dim[1:4],
+        width,
+        yerr=std_incorrect_0dim[1:4],
+        capsize=4,
+        label="Incorrect",
+        color="tomato",
+        alpha=0.85
+    )
+
+    axes[0].set_title("0D TDA Features")
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels(filter_names, rotation=35, ha="right")
+    axes[0].set_ylabel("Mean Feature Value")
+    axes[0].legend()
+    axes[0].grid(axis="y", alpha=0.25)
+
+    # -------------------------
+    # 1-dimensional features
+    # -------------------------
+    x = np.arange(len(feature_names))
+    
+    axes[1].bar(
+        x - width / 2,
+        avg_correct_1dim,
+        width,
+        yerr=std_correct_1dim,
+        capsize=4,
+        label="Correct",
+        color="steelblue",
+        alpha=0.85
+    )
+
+    axes[1].bar(
+        x + width / 2,
+        avg_incorrect_1dim,
+        width,
+        yerr=std_incorrect_1dim,
+        capsize=4,
+        label="Incorrect",
+        color="tomato",
+        alpha=0.85
+    )
+
+    axes[1].set_title("1D TDA Features")
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(feature_names, rotation=35, ha="right")
+    axes[1].set_ylabel("Mean Feature Value")
+    axes[1].legend()
+    axes[1].grid(axis="y", alpha=0.25)
+
+    plt.tight_layout()
+    plt.show()
+
     return 0
+
+# plot barcode graph
+def plot_barcode(model, dataset):
+    correct_feats, incorrect_feats = rand_sample(model, dataset)
+    
+    diagram_corr_list = correct_feats["diagrams"].to_list()
+    diagram_incorr_list = incorrect_feats["diagrams"].to_list()
+
+    diagram_corr = np.mean(np.stack(diagram_corr_list, axis=0), axis=0)
+    diagram_incorr = np.mean(np.stack(diagram_incorr_list, axis=0), axis=0)
+    
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    colors = ["tab:blue", "tab:orange"]
+    x1 = 0
+    x2 = 0
+
+    for dim, dgm in enumerate(diagram_corr):
+        for birth, death in dgm:
+            if np.isinf(death):
+                # Choose a finite endpoint for visualization
+                death = max(
+                    np.max(dgm[np.isfinite(dgm[:, 1]), 1]),
+                    birth + 1
+                )
+
+            ax.plot(
+                [birth, death],
+                [x1, x1],
+                color=colors[0],
+                linewidth=4
+            )
+
+            x1 += 1
+            
+    for dim, dgm in enumerate(diagram_incorr):
+        for birth, death in dgm:
+            if np.isinf(death):
+                # Choose a finite endpoint for visualization
+                death = max(
+                    np.max(dgm[np.isfinite(dgm[:, 1]), 1]),
+                    birth + 1
+                )
+
+            ax.plot(
+                [birth, death],
+                [x2, x2],
+                color=colors[1],
+                linewidth=4
+            )
+
+            x2 += 1
+
+    ax.set_xlabel("Topological feature")
+    ax.set_ylabel("Filtration value")
+    ax.set_title("Persistent Homology Barcode")
+
+    plt.tight_layout()
+    plt.show()
 
 
 ## == old functions for extracting attention + embeddings == ##

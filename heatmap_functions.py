@@ -162,8 +162,8 @@ def get_ling_feat(dataset, create = False):
 ## == CORRELATION HEATMAP == ##
 def make_heatmap(dataset, model_id, linguistic_label, tda_label, save = True):
     # get the topological and linguistic features
-    top_feat = get_top_feat(model_id, dataset)
-    ling_feat = get_ling_feat(dataset, model_id)
+    top_feat = topo.get_top_feat(model_id, dataset)
+    ling_feat = topo.get_ling_feat(dataset, model_id)
     
     # create masks for csvs
     correct = top_feat["correctness"] == 1
@@ -186,22 +186,38 @@ def make_heatmap(dataset, model_id, linguistic_label, tda_label, save = True):
 
     # randomly sample 100 entries from each
     srs = np.random.default_rng(8)
-    srs_rows = srs.choice(tda_filtered.shape[0], size=100, replace=False)
+    srs_rows_corr = srs.choice(correct_top_feat.shape[0], size=100, replace=False)
+    srs_rows_incorr = srs.choice(incorrect_top_feat.shape[0], size=100, replace=False)
 
-    correct_top_feat = correct_top_feat[srs_rows]
-    correct_ling_feat = correct_ling_feat[srs_rows]
+    correct_top_feat = correct_top_feat[srs_rows_corr]
+    correct_ling_feat = correct_ling_feat[srs_rows_corr]
 
-    incorrect_top_feat = incorrect_top_feat[srs_rows]
-    incorrect_ling_feat = incorrect_ling_feat[srs_rows]
+    incorrect_top_feat = incorrect_top_feat[srs_rows_incorr]
+    incorrect_ling_feat = incorrect_ling_feat[srs_rows_incorr]
+
+    # # potentially do if other no work
+    # correct_top_feat = correct_top_feat.reset_index(names="ind")
+    # correct_ling_feat = correct_ling_feat.reset_index(names="ind")
+    
+    # incorrect_top_feat = incorrect_top_feat.reset_index(names="ind")
+    # incorrect_ling_feat = incorrect_ling_feat.reset_index(names="ind")
+
+    # sample_size = 100
+    # rng = np.random.default_rng(seed=42)
+
+    # sampled_row_numbers = rng.choice(df1["original_row_num"], size=sample_size, replace=False)
+
+    # df1_sampled = df1[df1["original_row_num"].isin(sampled_row_numbers)]
+    # df2_sampled = df2[df2["original_row_num"].isin(sampled_row_numbers)]
 
     # compute pairwise distance correlation matrix
-    corr_matrix_correct = np.zeros((tda_features.shape[1], linguistic_features.shape[1]))
-    corr_matrix_incorrect = np.zeros((tda_features.shape[1], linguistic_features.shape[1]))
+    corr_matrix_correct = np.zeros((tda_features_correct.shape[1], linguistic_features_correct.shape[1]))
+    corr_matrix_incorrect = np.zeros((tda_features_incorrect.shape[1], linguistic_features.shape[1]))
     
     for i in range(correct_top_feat.shape[1]):
         for j in range(correct_ling_feat.shape[1]):
-            corr_correct = dcor.distance_correlation(correct_top_feat[:, i], correct_ling_feat[:, j])
-            corr_incorrect = dcor.distance_correlation(incorrect_top_feat[:, i], incorrect_ling_feat[:, j])
+            corr_correct = dcor.distance_correlation(tda_features_correct[:, i], linguistic_features_correct[:, j])
+            corr_incorrect = dcor.distance_correlation(tda_features_incorrect[:, i], linguistic_features_incorrect[:, j])
             if np.isnan(corr_correct):
                 corr_correct = np.nan_to_num(corr_correct)
             corr_correct[i, j] = corr_correct
