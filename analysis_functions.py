@@ -756,20 +756,20 @@ def get_top_feat(model, dataset, create = False):
     return feats_tda
 
 # sample from topo features
-def rand_sample(model, dataset, random_state=8):
+def rand_sample(model, dataset, rand=8):
     feats_tda = get_top_feat(model, dataset)
     
     # isolate correct/incorrect answers
     correct_feats = feats_tda[feats_tda["correctness"] == 1]
     incorrect_feats = feats_tda[feats_tda["correctness"] == 0]
 
-    correct_feats = correct_feats.sample(n=100, random_state)
-    incorrect_feats = incorrect_feats.sample(n=100, random_state)
+    correct_feats = correct_feats.sample(n=100, random_state=rand)
+    incorrect_feats = incorrect_feats.sample(n=100, random_state=rand)
 
     return correct_feats, incorrect_feats
 
 # analyze the h0 and h1 features
-def analyze_feats(model, dataset):
+def analyze_feats(model, dataset, focus= False):
     correct_feats, incorrect_feats = rand_sample(model, dataset)
 
 
@@ -807,7 +807,6 @@ def analyze_feats(model, dataset):
     # display info
     table = PrettyTable()
     feature_names = ["num_feat", "max_feat", "max_feat_minus_second", "mean_feat", "betti_curve", "persistence_entropy"]
-    filter_names = ["max_feat", "max_feat_minus_second", "mean_feat"]
     table.field_names = ["label"] + feature_names
     table.add_row(["correct_0dim"] + avg_correct_0dim)
     table.add_row(["correct_0dim_stdv"] + std_correct_0dim)
@@ -826,8 +825,19 @@ def analyze_feats(model, dataset):
 
     print(table)
 
+    if focus:
+        feature_names = ["max_feat", "max_feat_minus_second", "mean_feat"]
+        avg_correct_0dim = avg_correct_0dim[1:4]
+        std_correct_0dim = std_correct_0dim[1:4]
+        avg_incorrect_0dim = avg_incorrect_0dim[1:4]
+        std_incorrect_0dim = std_incorrect_0dim[1:4]
+        avg_correct_1dim = avg_correct_1dim[1:4]
+        std_correct_1dim = std_correct_1dim[1:4]
+        avg_incorrect_1dim = avg_incorrect_1dim[1:4]
+        std_incorrect_1dim = std_incorrect_1dim[1:4]
+
     # Plot
-    x = np.arange(len(filter_names))
+    x = np.arange(len(feature_names))
     width = 0.35
 
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
@@ -837,9 +847,9 @@ def analyze_feats(model, dataset):
     # -------------------------
     axes[0].bar(
         x - width / 2,
-        avg_correct_0dim[1:4],
+        avg_correct_0dim,
         width,
-        yerr=std_correct_0dim[1:4],
+        yerr=std_correct_0dim,
         capsize=4,
         label="Correct",
         color="steelblue",
@@ -848,9 +858,9 @@ def analyze_feats(model, dataset):
 
     axes[0].bar(
         x + width / 2,
-        avg_incorrect_0dim[1:4],
+        avg_incorrect_0dim,
         width,
-        yerr=std_incorrect_0dim[1:4],
+        yerr=std_incorrect_0dim,
         capsize=4,
         label="Incorrect",
         color="tomato",
@@ -859,7 +869,7 @@ def analyze_feats(model, dataset):
 
     axes[0].set_title("0D TDA Features")
     axes[0].set_xticks(x)
-    axes[0].set_xticklabels(filter_names, rotation=35, ha="right")
+    axes[0].set_xticklabels(feature_names, rotation=35, ha="right")
     axes[0].set_ylabel("Mean Feature Value")
     axes[0].legend()
     axes[0].grid(axis="y", alpha=0.25)
@@ -907,8 +917,8 @@ def analyze_feats(model, dataset):
 def plot_barcode(model, dataset):
     correct_feats, incorrect_feats = rand_sample(model, dataset)
     
-    diagram_corr_list = correct_feats["diagrams"].to_list()
-    diagram_incorr_list = incorrect_feats["diagrams"].to_list()
+    diagram_corr_list = correct_feats["diagrams"]
+    diagram_incorr_list = incorrect_feats["diagrams"]
 
     diagram_corr = np.mean(np.stack(diagram_corr_list, axis=0), axis=0)
     diagram_incorr = np.mean(np.stack(diagram_incorr_list, axis=0), axis=0)
@@ -961,6 +971,8 @@ def plot_barcode(model, dataset):
 
     plt.tight_layout()
     plt.show()
+
+    return 0
 
 
 ## == old functions for extracting attention + embeddings == ##
