@@ -768,6 +768,7 @@ def rand_sample(model, dataset, rand=8):
 
     return correct_feats, incorrect_feats
 
+##==ADDITIONAL ANALYSIS==##
 # analyze the h0 and h1 features
 def analyze_feats(model, dataset, focus= False):
     correct_feats, incorrect_feats = rand_sample(model, dataset)
@@ -913,61 +914,312 @@ def analyze_feats(model, dataset, focus= False):
 
     return 0
 
-# plot barcode graph
-def plot_barcode(model, dataset):
-    correct_feats, incorrect_feats = rand_sample(model, dataset)
+import re
+import numpy as np
+
+# gets diagrams from string
+def parse_diagram_string(s):
+    """
+    Parse a CSV string containing NumPy array representations such as:
+
+    [array([[0.0, 0.6],
+            [0.0, inf]]),
+     array([], shape=(0, 2), dtype=float64)]
+
+    Returns:
+        list[np.ndarray]
+    """
+    if not isinstance(s, str):
+        return s
+
+    arrays = []
+
+    # Find array([[...]]), including multiline arrays
+    matches = re.findall(
+        r'array\(\s*(\[\[.*?\]\])(?:,\s*shape=.*?)?\)',
+        s,
+        flags=re.DOTALL
+    )
+
+    for match in matches:
+
+        # Find each row: [0.0, 0.6]
+        rows = re.findall(r'\[([^\[\]]*)\]', match)
+
+        data = []
+
+        for row in rows:
+            values = [
+                float(x)
+                for x in row.replace(",", " ").split()
+            ]
+            data.append(values)
+
+        arrays.append(np.asarray(data, dtype=float))
+
+    # Handle empty arrays explicitly
+    if not arrays and "array([]" in s:
+        arrays.append(np.empty((0, 2), dtype=float))
+
+    return arrays
+
+
+# averages persistence diagrams
+def average_diagram(diagrams):
+    """
+    Average persistence diagrams with different numbers of points.
+
+    Each diagram is sorted by birth time and then death time.
+    Missing points are padded with NaN.
+    """
+
+    valid = [
+        np.asarray(d, dtype=float)
+        for d in diagrams
+        if d is not None and len(d) > 0
+    ]
+
+    if not valid:
+        return np.empty((0, 2))
+
+    # Sort each diagram consistently
+    valid = [
+        d[np.lexsort((d[:, 1], d[:, 0]))]
+        for d in valid
+    ]
+
+    max_n = max(len(d) for d in valid)
+
+    padded = np.full(
+        (len(valid), max_n, 2),
+        np.nan,
+        dtype=float
+    )
+
+    for i, d in enumerate(valid):
+        padded[i, :len(d), :] = d
+
+    return np.nanmean(padded, axis=0)
+
+# find death values for barcodes
+def get_death_values(sample_diagram):
+        values = []
+
+        for dgm in sample_diagram:
+            if dgm is None or len(dgm) == 0:
+                continue
+
+            dgm = np.asarray(dgm, dtype=float)
+
+            # Keep only finite death times
+            deaths = dgm[:, 1]
+            deaths = deaths[np.isfinite(deaths)]
+
+            values.extend(deaths)
+
+        return np.asarray(values)
+
+# # plot barcode graph
+# def plot_barcode(model, dataset):
+#     correct_feats, incorrect_feats = rand_sample(model, dataset)
     
-    diagram_corr_list = correct_feats["diagrams"]
-    diagram_incorr_list = incorrect_feats["diagrams"]
+#     diagram_corr_list = [parse_diagram_string(x) for x in correct_feats["diagrams"]]
+#     diagram_incorr_list = [parse_diagram_string(x) for x in incorrect_feats["diagrams"]]
 
-    diagram_corr = np.mean(np.stack(diagram_corr_list, axis=0), axis=0)
-    diagram_incorr = np.mean(np.stack(diagram_incorr_list, axis=0), axis=0)
+#     diagram_corr = [average_diagram([sample[d] for sample in diagram_corr_list]) for d in range(len(diagram_corr_list[0])) ]
+#     diagram_incorr = [average_diagram([sample[d] for sample in diagram_incorr_list]) for d in range(len(diagram_incorr_list[0]))]
     
-    fig, ax = plt.subplots(figsize=(12, 6))
+#     fig, ax = plt.subplots(figsize=(12, 6))
 
-    colors = ["tab:blue", "tab:orange"]
-    x1 = 0
-    x2 = 0
+#     colors = ["tab:blue", "tab:orange"]
+#     x1 = 0
+#     x2 = 0
 
-    for dim, dgm in enumerate(diagram_corr):
-        for birth, death in dgm:
-            if np.isinf(death):
-                # Choose a finite endpoint for visualization
-                death = max(
-                    np.max(dgm[np.isfinite(dgm[:, 1]), 1]),
-                    birth + 1
-                )
+#     for dim, dgm in enumerate(diagram_corr):
+#         for birth, death in dgm:
+#             if np.isinf(death):
+#                 # Choose a finite endpoint for visualization
+#                 death = max(
+#                     np.max(dgm[np.isfinite(dgm[:, 1]), 1]),
+#                     birth + 1
+#                 )
 
-            ax.plot(
-                [birth, death],
-                [x1, x1],
-                color=colors[0],
-                linewidth=4
-            )
+#             ax.plot(
+#                 [birth, death],
+#                 [x1, x1],
+#                 color=colors[0],
+#                 linewidth=4
+#             )
 
-            x1 += 1
+#             x1 += 1
             
-    for dim, dgm in enumerate(diagram_incorr):
-        for birth, death in dgm:
-            if np.isinf(death):
-                # Choose a finite endpoint for visualization
-                death = max(
-                    np.max(dgm[np.isfinite(dgm[:, 1]), 1]),
-                    birth + 1
-                )
+#     for dim, dgm in enumerate(diagram_incorr):
+#         for birth, death in dgm:
+#             if np.isinf(death):
+#                 # Choose a finite endpoint for visualization
+#                 death = max(
+#                     np.max(dgm[np.isfinite(dgm[:, 1]), 1]),
+#                     birth + 1
+#                 )
 
-            ax.plot(
-                [birth, death],
-                [x2, x2],
-                color=colors[1],
-                linewidth=4
+#             ax.plot(
+#                 [birth, death],
+#                 [x2, x2],
+#                 color=colors[1],
+#                 linewidth=4
+#             )
+
+#             x2 += 1
+
+#     ax.set_xlabel("Topological feature")
+#     ax.set_ylabel("Filtration value")
+#     ax.set_title("Persistent Homology Barcode")
+
+#     plt.tight_layout()
+#     plt.show()
+
+#     return 0
+
+def plot_barcode(model, dataset, bins=40):
+    correct_feats, incorrect_feats = rand_sample(model, dataset)
+
+    # Parse CSV strings
+    correct_diagrams = [
+        parse_diagram_string(x)
+        for x in correct_feats["diagrams"]
+    ]
+
+    incorrect_diagrams = [
+        parse_diagram_string(x)
+        for x in incorrect_feats["diagrams"]
+    ]
+
+    # ---------------------------------------------------------
+    # Extract DEATH / filtration values from each sample
+    # ---------------------------------------------------------
+    def get_filtration_values(sample_diagram):
+        values = []
+
+        for dgm in sample_diagram:
+            if dgm is None or len(dgm) == 0:
+                continue
+
+            dgm = np.asarray(dgm, dtype=float)
+
+            # Second column = death / filtration value
+            deaths = dgm[:, 1]
+
+            # Remove inf
+            deaths = deaths[np.isfinite(deaths)]
+
+            values.extend(deaths)
+
+        return np.asarray(values, dtype=float)
+
+    correct_values = [
+        get_filtration_values(x)
+        for x in correct_diagrams
+    ]
+
+    incorrect_values = [
+        get_filtration_values(x)
+        for x in incorrect_diagrams
+    ]
+
+    # Remove samples with no finite features
+    correct_values = [
+        x for x in correct_values if len(x) > 0
+    ]
+
+    incorrect_values = [
+        x for x in incorrect_values if len(x) > 0
+    ]
+
+    print("Correct samples:", len(correct_values))
+    print("Incorrect samples:", len(incorrect_values))
+
+    # ---------------------------------------------------------
+    # Common bins
+    # ---------------------------------------------------------
+    all_values = np.concatenate(
+        correct_values + incorrect_values
+    )
+
+    xmin = np.min(all_values)
+    xmax = np.max(all_values)
+
+    print("Filtration range:", xmin, xmax)
+
+    # Avoid zero-width range
+    if np.isclose(xmin, xmax):
+        xmin -= 0.01
+        xmax += 0.01
+
+    bin_edges = np.linspace(xmin, xmax, bins + 1)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+
+    # ---------------------------------------------------------
+    # Histogram each sample, then average across samples
+    # ---------------------------------------------------------
+    def average_histogram(samples):
+
+        histograms = []
+
+        for values in samples:
+
+            hist, _ = np.histogram(
+                values,
+                bins=bin_edges
             )
 
-            x2 += 1
+            # Normalize each sample independently
+            if hist.sum() > 0:
+                hist = hist / hist.sum()
 
-    ax.set_xlabel("Topological feature")
-    ax.set_ylabel("Filtration value")
-    ax.set_title("Persistent Homology Barcode")
+            histograms.append(hist)
+
+        histograms = np.asarray(histograms)
+
+        # Average corresponding filtration bins
+        return np.mean(histograms, axis=0)
+
+    correct_avg = average_histogram(correct_values)
+    incorrect_avg = average_histogram(incorrect_values)
+
+    # ---------------------------------------------------------
+    # Plot
+    # ---------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    width = bin_edges[1] - bin_edges[0]
+
+    ax.bar(
+        bin_centers,
+        correct_avg,
+        width=width,
+        alpha=0.55,
+        color="tab:red",
+        label="correct",
+        edgecolor="white",
+        linewidth=0.5
+    )
+
+    ax.bar(
+        bin_centers,
+        incorrect_avg,
+        width=width,
+        alpha=0.55,
+        color="tab:blue",
+        label="incorrect",
+        edgecolor="white",
+        linewidth=0.5
+    )
+
+    ax.set_xlabel("Filtration value")
+    ax.set_ylabel("Average proportion of features")
+    ax.set_title("Persistent Homology Feature Distribution")
+
+    ax.legend()
 
     plt.tight_layout()
     plt.show()
