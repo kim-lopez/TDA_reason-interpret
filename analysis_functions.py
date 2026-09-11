@@ -733,7 +733,7 @@ def get_top_feat(model, dataset, create = False):
             answer = questions["label"]
         elif data_name == "mcqa":
             answer = questions["alternative"].str.strip().str.upper()
-            answer = answer.map({"A": 0, "B": 1, "C": 2, "D": 3, "E": 4}
+            answer = answer.map({"A": 0, "B": 1, "C": 2, "D": 3, "E": 4})
         else:
             answer = questions["answer"]
         feats_tda = process_texts(feats_sen, answer, model_id)
