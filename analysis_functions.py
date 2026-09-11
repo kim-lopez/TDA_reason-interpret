@@ -731,6 +731,8 @@ def get_top_feat(model, dataset, create = False):
         answer = []
         if data_name == "hellaswag":
             answer = questions["label"]
+        elif data_name == "mcqa":
+            answer = questions["alternative"]
         else:
             answer = questions["answer"]
         feats_tda = process_texts(feats_sen, answer, model_id)
