@@ -509,10 +509,7 @@ def compute_tda_features(distance_matrix):
         0.0
     )
 
-    # =====================================================
-    # ATTENTION DISTANCE MATRIX --> RIPSER
-    # =====================================================
-
+    # ripser diagram
     diagrams = ripser(
         distance_matrix,
         distance_matrix=True,
@@ -521,16 +518,9 @@ def compute_tda_features(distance_matrix):
 
     h0 = diagrams[0]
 
-    h1 = (
-        diagrams[1]
-        if len(diagrams) > 1
-        else np.empty((0, 2))
-    )
+    h1 = (diagrams[1] if len(diagrams) > 1 else np.empty((0, 2)))
 
-    # =====================================================
-    # H0
-    # =====================================================
-
+    # h0 features
     h0_lifetimes = h0[:, 1] - h0[:, 0]
 
     finite_h0 = h0_lifetimes[
@@ -581,10 +571,7 @@ def compute_tda_features(distance_matrix):
         finite_h0
     )
 
-    # =====================================================
-    # H1
-    # =====================================================
-
+    # h1 features
     h1_lifetimes = (
         h1[:, 1] - h1[:, 0]
         if len(h1) > 0
@@ -756,15 +743,41 @@ def get_top_feat(model, dataset, create = False):
     return feats_tda
 
 # sample from topo features
-def rand_sample(model, dataset, rand=8):
-    feats_tda = get_top_feat(model, dataset)
+# def rand_sample(model, dataset, rand=8):
+#     feats_tda = get_top_feat(model, dataset)
     
-    # isolate correct/incorrect answers
+#     # isolate correct/incorrect answers
+#     correct_feats = feats_tda[feats_tda["correctness"] == 1]
+#     incorrect_feats = feats_tda[feats_tda["correctness"] == 0]
+
+#     correct_feats = correct_feats.sample(n=100, random_state=rand)
+#     incorrect_feats = incorrect_feats.sample(n=100, random_state=rand)
+
+#     return correct_feats, incorrect_feats
+
+def rand_sample(model, dataset, rand=None, n=100):
+    """
+    Randomly sample up to n correct and incorrect examples.
+
+    If there are fewer than n examples in either category,
+    all available examples are returned.
+    """
+
+    feats_tda = get_top_feat(model, dataset)
+
     correct_feats = feats_tda[feats_tda["correctness"] == 1]
+
     incorrect_feats = feats_tda[feats_tda["correctness"] == 0]
 
-    correct_feats = correct_feats.sample(n=100, random_state=rand)
-    incorrect_feats = incorrect_feats.sample(n=100, random_state=rand)
+    # Don't request more samples than are available
+    n_correct = min(n, len(correct_feats))
+    n_incorrect = min(n, len(incorrect_feats))
+
+    correct_feats = correct_feats.sample(n=n_correct,random_state=rand)
+
+    incorrect_feats = incorrect_feats.sample(n=n_incorrect, random_state=rand)
+
+    print( f"Sampling {n_correct} correct and {n_incorrect} incorrect examples")
 
     return correct_feats, incorrect_feats
 
@@ -837,15 +850,13 @@ def analyze_feats(model, dataset, focus= False):
         avg_incorrect_1dim = avg_incorrect_1dim[1:4]
         std_incorrect_1dim = std_incorrect_1dim[1:4]
 
-    # Plot
+    # plot
     x = np.arange(len(feature_names))
     width = 0.35
 
     fig, axes = plt.subplots(1, 2, figsize=(15, 6))
 
-    # -------------------------
-    # 0-dimensional features
-    # -------------------------
+    # 0 dim feats
     axes[0].bar(
         x - width / 2,
         avg_correct_0dim,
@@ -875,9 +886,7 @@ def analyze_feats(model, dataset, focus= False):
     axes[0].legend()
     axes[0].grid(axis="y", alpha=0.25)
 
-    # -------------------------
-    # 1-dimensional features
-    # -------------------------
+    # 1 dim feats
     x = np.arange(len(feature_names))
     
     axes[1].bar(
@@ -914,51 +923,54 @@ def analyze_feats(model, dataset, focus= False):
 
     return 0
 
-import re
-import numpy as np
 
 # gets diagrams from string
 def parse_diagram_string(s):
     """
-    Parse a CSV string containing NumPy array representations such as:
-
-    [array([[0.0, 0.6],
-            [0.0, inf]]),
-     array([], shape=(0, 2), dtype=float64)]
-
-    Returns:
-        list[np.ndarray]
+    extract the 0 dim + 1 dim persistence diagrams as an (N, 2) np array
     """
+
     if not isinstance(s, str):
         return s
 
+    # Only parse content after '#'
+    s = s.split("#", 1)[-1]
+
     arrays = []
 
-    # Find array([[...]]), including multiline arrays
+    # Find each array(...) representation
     matches = re.findall(
-        r'array\(\s*(\[\[.*?\]\])(?:,\s*shape=.*?)?\)',
+        r'array\(\s*(.*?)\)',
         s,
         flags=re.DOTALL
     )
 
-    for match in matches:
+    for match in matches[:2]:
 
-        # Find each row: [0.0, 0.6]
-        rows = re.findall(r'\[([^\[\]]*)\]', match)
+        # Find [birth, death] pairs
+        pairs = re.findall(
+            r'\[\s*([-+0-9.eEinfnaINFNA]+)\s*,\s*([-+0-9.eEinfnaINFNA]+)\s*\]',
+            match
+        )
 
         data = []
 
-        for row in rows:
-            values = [
-                float(x)
-                for x in row.replace(",", " ").split()
-            ]
-            data.append(values)
+        for birth, death in pairs:
+            try:
+                data.append([
+                    float(birth),
+                    float(death)
+                ])
+            except ValueError:
+                pass
 
-        arrays.append(np.asarray(data, dtype=float))
+        # ALWAYS force shape (N, 2)
+        diagram = np.asarray(data, dtype=float).reshape(-1, 2)
 
-    # Handle empty arrays explicitly
-    if not arrays and "array([]" in s:
+        arrays.append(diagram)
+
+    # If fewer than 2 arrays were found
+    while len(arrays) < 2:
         arrays.append(np.empty((0, 2), dtype=float))
 
     return arrays
@@ -1001,23 +1013,52 @@ def average_diagram(diagrams):
 
     return np.nanmean(padded, axis=0)
 
-# find death values for barcodes
-def get_death_values(sample_diagram):
-        values = []
+def pad_empty_barcodes(barcodes):
+    """
+    Replace empty (0, 2) barcodes with zeros having the same
+    number of rows as the largest barcode.
+    """
+    non_empty = [x for x in barcodes if x.size > 0]
 
-        for dgm in sample_diagram:
-            if dgm is None or len(dgm) == 0:
-                continue
+    if not non_empty:
+        return barcodes
 
-            dgm = np.asarray(dgm, dtype=float)
+    max_len = max(len(x) for x in non_empty)
 
-            # Keep only finite death times
-            deaths = dgm[:, 1]
-            deaths = deaths[np.isfinite(deaths)]
+    padded = []
 
-            values.extend(deaths)
+    for x in barcodes:
+        if x.size == 0:
+            padded.append(np.zeros((max_len, 2), dtype=float))
+        else:
+            padded.append(x)
 
-        return np.asarray(values)
+    return padded
+
+# # find death values for barcodes
+# def get_death_values(sample_diagram):
+#         values = []
+
+#         for dgm in sample_diagram:
+#             print(dgm)
+#             if dgm is None or len(dgm) == 0:
+#                 continue
+
+#             dgm = np.asarray(dgm, dtype=float)
+
+#             # keep only finite death times
+
+#             print("DEBUG dgm:")
+#             print("  value:", dgm)
+#             print("  shape:", dgm.shape)
+#             print("  ndim:", dgm.ndim)
+
+#             deaths = dgm[:, 1]
+#             deaths = deaths[np.isfinite(deaths)]
+
+#             values.extend(deaths)
+
+#         return np.asarray(values)
 
 # # plot barcode graph
 # def plot_barcode(model, dataset):
@@ -1081,150 +1122,377 @@ def get_death_values(sample_diagram):
 #     return 0
 
 def plot_barcode(model, dataset, bins=40):
+    """
+    Plot average persistence barcode death-value distributions
+    for correct vs incorrect predictions.
+
+    Y-axis:
+        Average proportion of features per sample.
+
+    Each sample's histogram is normalized so that its bins
+    sum to 1 before averaging across samples.
+
+    Handles:
+        - Empty persistence diagrams
+        - No incorrect samples
+        - No 1D features
+        - inf/nan barcode values
+
+    Assumes parse_diagram_string(x) returns:
+        [
+            array([[birth, death], ...]),   # 0D
+            array([[birth, death], ...])    # 1D
+        ]
+    """
+
+    # ==========================================================
+    # Get correct / incorrect samples
+    # ==========================================================
+
     correct_feats, incorrect_feats = rand_sample(model, dataset)
 
-    # Parse CSV strings
-    correct_diagrams = [
-        parse_diagram_string(x)
-        for x in correct_feats["diagrams"]
-    ]
+    correct_diagrams = correct_feats["diagrams"]
+    incorrect_diagrams = incorrect_feats["diagrams"]
 
-    incorrect_diagrams = [
-        parse_diagram_string(x)
-        for x in incorrect_feats["diagrams"]
-    ]
+    # ==========================================================
+    # Parse persistence diagrams
+    # ==========================================================
 
-    # ---------------------------------------------------------
-    # Extract DEATH / filtration values from each sample
-    # ---------------------------------------------------------
-    def get_filtration_values(sample_diagram):
-        values = []
-
-        for dgm in sample_diagram:
-            if dgm is None or len(dgm) == 0:
-                continue
-
-            dgm = np.asarray(dgm, dtype=float)
-
-            # Second column = death / filtration value
-            deaths = dgm[:, 1]
-
-            # Remove inf
-            deaths = deaths[np.isfinite(deaths)]
-
-            values.extend(deaths)
-
-        return np.asarray(values, dtype=float)
-
-    correct_values = [
-        get_filtration_values(x)
+    correct_0dim = [
+        parse_diagram_string(x)[0]
         for x in correct_diagrams
     ]
 
-    incorrect_values = [
-        get_filtration_values(x)
+    correct_1dim = [
+        parse_diagram_string(x)[1]
+        for x in correct_diagrams
+    ]
+
+    incorrect_0dim = [
+        parse_diagram_string(x)[0]
         for x in incorrect_diagrams
     ]
 
-    # Remove samples with no finite features
-    correct_values = [
-        x for x in correct_values if len(x) > 0
+    incorrect_1dim = [
+        parse_diagram_string(x)[1]
+        for x in incorrect_diagrams
     ]
 
-    incorrect_values = [
-        x for x in incorrect_values if len(x) > 0
-    ]
+    # ==========================================================
+    # Extract death values
+    # ==========================================================
 
-    print("Correct samples:", len(correct_values))
-    print("Incorrect samples:", len(incorrect_values))
+    def extract_death_values(diagrams):
 
-    # ---------------------------------------------------------
-    # Common bins
-    # ---------------------------------------------------------
-    all_values = np.concatenate(
-        correct_values + incorrect_values
+        values = []
+
+        for diagram in diagrams:
+
+            # Empty diagram
+            if diagram is None or diagram.size == 0:
+                continue
+
+            # Make sure barcode has shape (N, 2)
+            if diagram.ndim != 2 or diagram.shape[1] < 2:
+                continue
+
+            # Death column
+            death = diagram[:, 1]
+
+            # Remove inf / nan
+            death = death[np.isfinite(death)]
+
+            if len(death) > 0:
+                values.append(death)
+
+        return values
+
+    filter_corr_0dim = extract_death_values(correct_0dim)
+    filter_incorr_0dim = extract_death_values(incorrect_0dim)
+
+    filter_corr_1dim = extract_death_values(correct_1dim)
+    filter_incorr_1dim = extract_death_values(incorrect_1dim)
+
+    # ==========================================================
+    # Print information
+    # ==========================================================
+
+    print("Correct samples 0 dim:", len(filter_corr_0dim))
+    print("Incorrect samples 0 dim:", len(filter_incorr_0dim))
+
+    print("Correct samples 1 dim:", len(filter_corr_1dim))
+    print("Incorrect samples 1 dim:", len(filter_incorr_1dim))
+
+    # ==========================================================
+    # Calculate ranges
+    # ==========================================================
+
+    def get_range(samples):
+
+        if len(samples) == 0:
+            return None, None
+
+        all_values = np.concatenate(samples)
+
+        # Remove inf / nan
+        all_values = all_values[np.isfinite(all_values)]
+
+        if len(all_values) == 0:
+            return None, None
+
+        return np.min(all_values), np.max(all_values)
+
+    xmin_0dim, xmax_0dim = get_range(
+        filter_corr_0dim + filter_incorr_0dim
     )
 
-    xmin = np.min(all_values)
-    xmax = np.max(all_values)
+    xmin_1dim, xmax_1dim = get_range(
+        filter_corr_1dim + filter_incorr_1dim
+    )
 
-    print("Filtration range:", xmin, xmax)
+    print("Filtration range 0 dim:", xmin_0dim, xmax_0dim)
+    print("Filtration range 1 dim:", xmin_1dim, xmax_1dim)
 
-    # Avoid zero-width range
-    if np.isclose(xmin, xmax):
-        xmin -= 0.01
-        xmax += 0.01
+    # ==========================================================
+    # Create bins
+    # ==========================================================
 
-    bin_edges = np.linspace(xmin, xmax, bins + 1)
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    if xmin_0dim is not None:
 
-    # ---------------------------------------------------------
-    # Histogram each sample, then average across samples
-    # ---------------------------------------------------------
-    def average_histogram(samples):
+        # Avoid zero-width bins
+        if xmin_0dim == xmax_0dim:
+            xmax_0dim = xmin_0dim + 1e-6
+
+        bin_edges_0dim = np.linspace(
+            xmin_0dim,
+            xmax_0dim,
+            bins + 1
+        )
+
+        bin_centers_0dim = (
+            bin_edges_0dim[:-1] +
+            bin_edges_0dim[1:]
+        ) / 2
+
+    else:
+
+        bin_edges_0dim = None
+        bin_centers_0dim = None
+
+    # ----------------------------------------------------------
+    # 1D bins
+    # ----------------------------------------------------------
+
+    if xmin_1dim is not None:
+
+        if xmin_1dim == xmax_1dim:
+            xmax_1dim = xmin_1dim + 1e-6
+
+        bin_edges_1dim = np.linspace(
+            xmin_1dim,
+            xmax_1dim,
+            bins + 1
+        )
+
+        bin_centers_1dim = (
+            bin_edges_1dim[:-1] +
+            bin_edges_1dim[1:]
+        ) / 2
+
+    else:
+
+        bin_edges_1dim = None
+        bin_centers_1dim = None
+
+    # ==========================================================
+    # Average normalized histogram
+    # ==========================================================
+
+    def average_histogram(samples, bin_edges):
+
+        # No features
+        if len(samples) == 0 or bin_edges is None:
+            return np.zeros(bins)
 
         histograms = []
 
         for values in samples:
 
+            # Remove invalid values
+            values = values[np.isfinite(values)]
+
+            if len(values) == 0:
+                continue
+
+            # Raw histogram
             hist, _ = np.histogram(
                 values,
                 bins=bin_edges
             )
 
-            # Normalize each sample independently
-            if hist.sum() > 0:
-                hist = hist / hist.sum()
+            # --------------------------------------------------
+            # Normalize EACH SAMPLE independently
+            # --------------------------------------------------
+            total = hist.sum()
+
+            if total > 0:
+                hist = hist / total
 
             histograms.append(hist)
 
-        histograms = np.asarray(histograms)
+        # If no valid samples
+        if len(histograms) == 0:
+            return np.zeros(bins)
 
-        # Average corresponding filtration bins
-        return np.mean(histograms, axis=0)
+        # Average normalized histograms
+        return np.mean(
+            np.asarray(histograms),
+            axis=0
+        )
 
-    correct_avg = average_histogram(correct_values)
-    incorrect_avg = average_histogram(incorrect_values)
+    # ==========================================================
+    # Calculate normalized distributions
+    # ==========================================================
 
-    # ---------------------------------------------------------
+    correct_avg_0dim = average_histogram(
+        filter_corr_0dim,
+        bin_edges_0dim
+    )
+
+    incorrect_avg_0dim = average_histogram(
+        filter_incorr_0dim,
+        bin_edges_0dim
+    )
+
+    correct_avg_1dim = average_histogram(
+        filter_corr_1dim,
+        bin_edges_1dim
+    )
+
+    incorrect_avg_1dim = average_histogram(
+        filter_incorr_1dim,
+        bin_edges_1dim
+    )
+
+    # ==========================================================
     # Plot
-    # ---------------------------------------------------------
-    fig, ax = plt.subplots(figsize=(10, 6))
+    # ==========================================================
 
-    width = bin_edges[1] - bin_edges[0]
-
-    ax.bar(
-        bin_centers,
-        correct_avg,
-        width=width,
-        alpha=0.55,
-        color="tab:red",
-        label="correct",
-        edgecolor="white",
-        linewidth=0.5
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(12, 5)
     )
 
-    ax.bar(
-        bin_centers,
-        incorrect_avg,
-        width=width,
-        alpha=0.55,
-        color="tab:blue",
-        label="incorrect",
-        edgecolor="white",
-        linewidth=0.5
-    )
+    # ==========================================================
+    # 0D plot
+    # ==========================================================
 
-    ax.set_xlabel("Filtration value")
-    ax.set_ylabel("Average proportion of features")
-    ax.set_title("Persistent Homology Feature Distribution")
+    if bin_edges_0dim is not None:
 
-    ax.legend()
+        width_0dim = (
+            bin_edges_0dim[1] -
+            bin_edges_0dim[0]
+        )
+
+        axes[0].bar(
+            bin_centers_0dim,
+            correct_avg_0dim,
+            width=width_0dim,
+            alpha=0.55,
+            color="tab:blue",
+            label="Correct",
+            edgecolor="white",
+            linewidth=0.5
+        )
+
+        axes[0].bar(
+            bin_centers_0dim,
+            incorrect_avg_0dim,
+            width=width_0dim,
+            alpha=0.55,
+            color="tab:red",
+            label="Incorrect",
+            edgecolor="white",
+            linewidth=0.5
+        )
+
+        axes[0].legend()
+
+    else:
+
+        axes[0].text(
+            0.5,
+            0.5,
+            "No 0D features",
+            ha="center",
+            va="center",
+            transform=axes[0].transAxes
+        )
+
+    axes[0].set_xlabel("Filtration value")
+    axes[0].set_ylabel("Average proportion of features")
+    axes[0].set_title("PH Barcode Distribution — 0D")
+
+    # ==========================================================
+    # 1D plot
+    # ==========================================================
+
+    if bin_edges_1dim is not None:
+
+        width_1dim = (
+            bin_edges_1dim[1] -
+            bin_edges_1dim[0]
+        )
+
+        axes[1].bar(
+            bin_centers_1dim,
+            correct_avg_1dim,
+            width=width_1dim,
+            alpha=0.55,
+            color="tab:blue",
+            label="Correct",
+            edgecolor="white",
+            linewidth=0.5
+        )
+
+        axes[1].bar(
+            bin_centers_1dim,
+            incorrect_avg_1dim,
+            width=width_1dim,
+            alpha=0.55,
+            color="tab:red",
+            label="Incorrect",
+            edgecolor="white",
+            linewidth=0.5
+        )
+
+        axes[1].legend()
+
+    else:
+
+        axes[1].text(
+            0.5,
+            0.5,
+            "No 1D features",
+            ha="center",
+            va="center",
+            transform=axes[1].transAxes
+        )
+
+    axes[1].set_xlabel("Filtration value")
+    axes[1].set_ylabel("Average proportion of features")
+    axes[1].set_title("PH Barcode Distribution — 1D")
+
+    # ==========================================================
+    # Finish
+    # ==========================================================
 
     plt.tight_layout()
     plt.show()
 
     return 0
+
 
 
 ## == old functions for extracting attention + embeddings == ##
