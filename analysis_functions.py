@@ -80,7 +80,7 @@ def which_model(model):
 # check if answer is correct
 def evaluate_model(real_answer, llm_answer):
     correct_index = int(real_answer)
-    match = re.search(r"Answer:\s*([A-D])|([A-D])\s*$", llm_answer.strip(), re.IGNORECASE)
+    match = re.search(r"Answer:\s*([A-E])|([A-E])\s*$", llm_answer.strip(), re.IGNORECASE)
     
     if match:
         extracted = (match.group(1) or match.group(2)).upper()
@@ -731,6 +731,9 @@ def get_top_feat(model, dataset, create = False):
         answer = []
         if data_name == "hellaswag":
             answer = questions["label"]
+        elif data_name == "mcqa":
+            answer = questions["alternative"].str.strip().str.upper()
+            answer = answer.map({"A": 0, "B": 1, "C": 2, "D": 3, "E": 4})
         else:
             answer = questions["answer"]
         feats_tda = process_texts(feats_sen, answer, model_id)
