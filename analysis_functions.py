@@ -1630,3 +1630,57 @@ def plot_barcode(model, dataset, bins=40):
 #     columns = ["Num_0dim", "Max_0dim", "Max_0dim_Minus_Second", "Mean_0dim", "betti_curve_0", "persistence_entropy_0",
 #                "Num_1dim", "Max_1dim", "Max_1dim_Minus_Second", "Mean_1dim", "betti_curve_1", "persistence_entropy_1"]
 #     return pd.DataFrame(data, columns=columns)
+
+
+def plot_accuracy(model, datasets, title=None):
+    """
+    data: dict mapping model name -> (accuracy, average_h0)
+          e.g. {"word2vec": (53, 120), "GloVe": (55, 135), "GPT-1": (60, 140)}
+    """
+    data = {}
+    for dataset in datasets:
+        df = pd.read_csv(f'/Users/kimlopez/TDA_RI/TDA_reason-interpret/{model[2]}/{model[2]}_{dataset[0]}_tda.csv')
+        accuracy = df['correctness'].value_counts(normalize=True)[True]
+        mean = df["Num_0dim"].mean()
+        # stdv = df["Num_0dim"].sem()
+        
+        # correct_feats, incorrect_feats = rand_sample(model, dataset, 1000)
+        # mean_corr = correct_feats["Num_0dim"].mean(), correct_feats["Max_0dim"].mean()
+        # stdv_corr = correct_feats["Max_0dim_Minus_Second"].mean(), correct_feats["Mean_0dim"].mean()
+        # mean_incorr = correct_feats["Num_0dim"].mean(), correct_feats["Max_0dim"].mean()
+        # stdv_incorr = correct_feats["Max_0dim_Minus_Second"].mean(), correct_feats["Mean_0dim"].mean()
+
+        data[f"{dataset[0]}"] = (accuracy, mean)
+
+    colors = {"hellaswag": "red", "mmlu_law": "green", "mmlu_math": "blue",
+              "mmlu_misc": "orange", "mmlu_moral": "purple", "mmlu_psych": "pink",
+              "mcqa": "yellow"}
+
+    fig, ax = plt.subplots(figsize=(5, 4))
+
+    for dataset, (accuracy, h0) in data.items():
+        ax.scatter(h0, accuracy,
+                   color=colors.get(dataset, "black"),
+                   label=dataset, s=35)
+
+        # Label each point
+        ax.annotate(
+            dataset,
+            (h0, accuracy),
+            xytext=(5, 5),
+            textcoords="offset points",
+            fontsize=8
+        )
+
+    ax.set_ylim(0, 1)
+
+    ax.set_xlabel("Average h0 value")
+    ax.set_ylabel("Accuracy")
+
+    if title:
+        ax.set_title(title)
+
+    ax.legend(loc="upper right", fontsize=7)
+    ax.grid(False)
+    plt.tight_layout()
+    plt.show()
