@@ -1,6 +1,8 @@
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 from scipy.stats import gaussian_kde
+from sklearn.metrics import r2_score
 from matplotlib.colors import TwoSlopeNorm
 import analysis_functions as topo
 
@@ -2317,6 +2319,61 @@ def plot_h0_component_curves(
         "incorrect_persistence": incorrect_persistence,
     }
 
+# helper for persistence
+def extract_diagram(dgm, dim=0):
+    try:
+        arr = np.asarray(dgm, dtype=float)
+
+        if arr.ndim == 2 and arr.shape[1] == 2:
+            return arr
+
+    except (ValueError, TypeError):
+        pass
+
+    try:
+        arr = np.asarray(
+            dgm[dim],
+            dtype=float
+        )
+
+        if arr.ndim == 2 and arr.shape[1] == 2:
+            return arr
+
+    except (ValueError, TypeError, IndexError):
+        pass
+
+    raise ValueError(
+        f"Could not extract H{dim} persistence diagram.\n"
+        f"Input type: {type(dgm)}"
+    )
+
+# extract persistence variables
+def get_persistence(dgm):
+
+    arr = extract_diagram(dgm)
+
+    # remove infinite intervals
+    arr = arr[
+        np.isfinite(arr).all(axis=1)
+    ]
+
+    if len(arr) == 0:
+        return np.array([], dtype=float)
+
+    persistence = (
+        arr[:, 1] - arr[:, 0]
+    )
+
+    # Remove invalid / zero persistence
+    persistence = persistence[
+        np.isfinite(persistence)
+    ]
+
+    persistence = persistence[
+        persistence > 0
+    ]
+
+    return persistence
 
 def plot_persistence_heatmap(
     correct_diagrams,
@@ -2350,81 +2407,7 @@ def plot_persistence_heatmap(
     across samples.
     """
 
-    # ================================================================
-    # Helper: safely extract requested dimension
-    # ================================================================
-
-    def extract_diagram(dgm):
-
-        # ------------------------------------------------------------
-        # Case 1: already a numeric Nx2 persistence diagram
-        # ------------------------------------------------------------
-
-        try:
-            arr = np.asarray(dgm, dtype=float)
-
-            if arr.ndim == 2 and arr.shape[1] == 2:
-                return arr
-
-        except (ValueError, TypeError):
-            pass
-
-        # ------------------------------------------------------------
-        # Case 2: full persistence diagram [H0, H1, ...]
-        # ------------------------------------------------------------
-
-        try:
-            arr = np.asarray(
-                dgm[dim],
-                dtype=float
-            )
-
-            if arr.ndim == 2 and arr.shape[1] == 2:
-                return arr
-
-        except (ValueError, TypeError, IndexError):
-            pass
-
-        raise ValueError(
-            f"Could not extract H{dim} persistence diagram.\n"
-            f"Input type: {type(dgm)}"
-        )
-
-    # ================================================================
-    # Extract persistence values
-    # ================================================================
-
-    def get_persistence(dgm):
-
-        arr = extract_diagram(dgm)
-
-        # Remove infinite intervals
-        arr = arr[
-            np.isfinite(arr).all(axis=1)
-        ]
-
-        if len(arr) == 0:
-            return np.array([], dtype=float)
-
-        persistence = (
-            arr[:, 1] - arr[:, 0]
-        )
-
-        # Remove invalid / zero persistence
-        persistence = persistence[
-            np.isfinite(persistence)
-        ]
-
-        persistence = persistence[
-            persistence > 0
-        ]
-
-        return persistence
-
-    # ================================================================
-    # Get persistence values for every sample
-    # ================================================================
-
+    # get persistence values for each sample
     correct_persistence = [
         get_persistence(dgm)
         for dgm in correct_diagrams
@@ -2785,11 +2768,7 @@ def _collect_diagrams(diagrams, dim=0):
 
     return result
 
-
-# ==============================================================================
-# BIRTH × PERSISTENCE
-# ==============================================================================
-
+# birth persistence overlay
 def plot_birth_persistence_overlay(
     correct_diagrams,
     incorrect_diagrams,
@@ -3868,3 +3847,82 @@ def plot_betti_curve(
         "correct": correct_betti,
         "incorrect": incorrect_betti,
     }
+
+def persistence_diff_acc(datasets, models, type="avg"):
+    colors = {"llama": "orange", "qwen": "green", "mistral": "blue"}
+    fig, ax = plt.subplots(figsize=(5, 4))
+    per_list = []
+    acc_list = []
+    for dataset in datasets:
+        for model in models:
+            df = pd.read_csv(f'/Users/kimlopez/TDA_RI/TDA_reason-interpret/{model[2]}/{model[2]}_{dataset[0]}_tda.csv')
+            accuracy = df['correctness'].value_counts(normalize=True)[True]
+            
+            correct_diagrams, incorrect_diagrams = sample_helper(model, dataset, num=100)
+            
+            # get persistence values for each sample
+            correct_persistence = [get_persistence(dgm) for dgm in correct_diagrams]
+            incorrect_persistence = [get_persistence(dgm) for dgm in incorrect_diagrams]
+            
+            # remove irrelevant values
+            correct_persistence = [p for p in correct_persistence if len(p) > 0]
+            incorrect_persistence = [p for p in incorrect_persistence if len(p) > 0]
+
+            print("persistence: ", correct_persistence)
+
+            # get difference in samples
+            # per_diff = [x - y for x, y in zip(correct_persistence, incorrect_persistence)]
+            # avg_diff = np.mean(per_diff)
+            if type == "avg":
+                correct_persistence = np.mean(correct_persistence[0])
+                incorrect_persistence = np.mean(incorrect_persistence[0])
+            else:
+                correct_persistence = [np.sum(p) for p in correct_persistence if len(p) > 0]
+                incorrect_persistence = [np.sum(p) for p in incorrect_persistence if len(p) > 0]   
+
+            avg_corr = np.mean(correct_persistence)
+            avg_incorr = np.mean(incorrect_persistence)
+            avg_diff = abs(avg_corr - avg_incorr)
+
+            per_list.append(avg_diff)
+            acc_list.append(accuracy)
+
+            ax.scatter(avg_diff, accuracy,
+                    color=colors.get(model[2], "black"),
+                    label=dataset, s=35)
+
+            ax.annotate(dataset[0], (avg_diff, accuracy),
+                    xytext=(5, 5),
+                    textcoords="offset points",
+                    fontsize=8)
+    
+    # lin reg
+    if len(per_list) > 1:
+        x = np.asarray(per_list, dtype=float)
+        y = np.asarray(acc_list, dtype=float)
+
+        m, b = np.polyfit(x, y, 1)
+
+        x_line = np.linspace(x.min(), x.max(), 100)
+        y_line = m * x_line + b
+
+        y_pred = m * x + b
+        r2 = r2_score(y, y_pred)
+
+        ax.plot(
+            x_line,
+            y_line,
+            color=colors.get(dataset[0], "black"),
+            linestyle="--",
+            linewidth=2,
+            label=f"{dataset} regression ($R^2={r2:.2f}$)"
+        )
+    
+    ax.set_xlabel("Average Persistence Difference")
+    ax.set_ylabel("Accuracy")
+    ax.set_title("Persistence Difference vs. Accuracy")
+
+    ax.legend(["llama", "qwen", "mistral"], loc="upper right", fontsize=7)
+    ax.grid(False)
+    plt.tight_layout()
+    plt.show()
