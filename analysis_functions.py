@@ -379,7 +379,7 @@ def attention_to_distance(attention_matrix):
 #     return [num_h0, highest_h0, highest_minus_second_h0, mean_h0, betti_curve_0, persistence_entropy_0,
 #             num_h1, highest_h1, highest_minus_second_h1, mean_h1, betti_curve_1, persistence_entropy_1]
 
-def _persistence_entropy(persistences):
+def persistence_entropy(persistences):
 
     persistences = np.asarray(
         persistences,
@@ -723,7 +723,7 @@ def get_top_feat(model, dataset, create = False):
     data_name, data_csv = data_label(dataset)
     questions = pd.read_csv(data_csv)
     
-    tda_path = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpret/{model_short}/{model_short}_{data_name}_tda.csv")
+    tda_path = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpret/att_map/{model_short}/{model_short}_{data_name}_tda.csv")
 
     # either create or load data
     if create:
@@ -731,6 +731,8 @@ def get_top_feat(model, dataset, create = False):
         answer = []
         if data_name == "hellaswag":
             answer = questions["label"]
+        elif data_name == "mcqa":
+            answer = questions["alternative"]
         else:
             answer = questions["answer"]
         feats_tda = process_texts(feats_sen, answer, model_id)
