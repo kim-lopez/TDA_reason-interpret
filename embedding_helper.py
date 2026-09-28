@@ -1,33 +1,60 @@
+import pandas as pd
+from tqdm import tqdm
+import numpy as np
+from ripser import ripser
+import torch
+import os
 import analysis_functions as topo
 
-def get_embeddings(text, model, tokenizer, index):
-    inputs = tokenizer(text, return_tensors="pt").to(model.device)
-    
+def get_embeddings(text, model, tokenizer, layer):
+    inputs = tokenizer(
+        text,
+        return_tensors="pt",
+        truncation=True
+    ).to(model.device)
+
     with torch.no_grad():
-        outputs = model(**inputs, output_hidden_states=True)
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=256,
+            do_sample=False,
+            return_dict_in_generate=True,
+            output_hidden_states=True,
+        )
 
-    llm_answer = tokenizer.decode(llm_tokens, skip_special_tokens=True,
-                                  clean_up_tokenization_spaces=False)
+    # Full generated answer
+    llm_answer = tokenizer.decode(
+        outputs.sequences[0],
+        skip_special_tokens=True
+    )
     
-    print(f"Total number of layers captured (embeddings + blocks): {len(all_hidden_states)}")
-    print(f"Shape of hidden states at layer 15: {all_hidden_states[15].shape}")
-
-    # outputs.hidden_states is a tuple containing:                                                                                                                                            
-    # index 0: output of the embedding layer                                                                                                                                                
-    # index > 1 output of each respective transformer decoder layer                                                                                                  
     all_hidden_states = outputs.hidden_states
 
-    return all_hidden_states[index], llm_answer
+    # outputs.hidden_states is a tuple containing:
+    # index 0: output of the embedding layer
+    # index > 1 output of each respective transformer decoder layer
+    
+    # hidden states from requested layer
+    # outputs.hidden_states: generation step -> layer -> tensor
+    # each generation step generally has shape:
+    #   [batch, 1, hidden_size]
+    embeddings = torch.cat(
+        [step[layer] for step in outputs.hidden_states],
+        dim=1
+    )
+    
+    print(f"Total number of layers captured (embeddings + blocks): {len(all_hidden_states)}")
+    print(f"Shape of hidden states at layer {layer}: {embeddings.shape}")
+
+    return embeddings, llm_answer
+
 
 def compute_emb_tda_feat(embeddings):
     """
     Run persistent homology directly on the
     activations!
     """
-    embeddings = np.asarray(
-        embeddings,
-        dtype=np.float64
-    )
+    embeddings = embeddings.detach().cpu().numpy().astype(np.float64).squeeze(0)
 
     if embeddings.ndim != 2:
         raise ValueError(
@@ -87,16 +114,17 @@ def compute_emb_tda_feat(embeddings):
         else 0.0
     )
 
-    betti_curve_0_array = compute_betti_curve(
+
+    betti_curve_0_array = topo.compute_betti_curve(
         h0,
         num_bins=50
     )
-
-    betti_curve_0 = summarize_betti_curve(
+    
+    betti_curve_0 = topo.summarize_betti_curve(
         betti_curve_0_array
     )
 
-    persistence_entropy_0 = _persistence_entropy(
+    persistence_entropy_0 = topo.persistence_entropy(
         finite_h0
     )
 
@@ -142,16 +170,16 @@ def compute_emb_tda_feat(embeddings):
         else 0.0
     )
 
-    betti_curve_1_array = compute_betti_curve(
+    betti_curve_1_array = topo.compute_betti_curve(
         h1,
         num_bins=50
     )
 
-    betti_curve_1 = summarize_betti_curve(
+    betti_curve_1 = topo.summarize_betti_curve(
         betti_curve_1_array
     )
 
-    persistence_entropy_1 = _persistence_entropy(
+    persistence_entropy_1 = topo.persistence_entropy(
         finite_h1
     )
 
@@ -160,13 +188,13 @@ def compute_emb_tda_feat(embeddings):
             diagrams]
 
 
-def process_emb(texts, answer, model_id, index):
+def process_emb(texts, answer, model_id, layer):
     model, tokenizer = topo.load_model(model_id)
     data = []
 
-    for index, text in enumerate(tqdm(texts)):
-        embeddings, llm_answer = get_embeddings(text, model, tokenizer, index)
-        real_answer = answer[index]
+    for text_ind, text in enumerate(tqdm(texts)):
+        embeddings, llm_answer = get_embeddings(text, model, tokenizer, layer)
+        real_answer = answer[text_ind]
         print("answer: ", real_answer)
 
         tda_features = compute_emb_tda_feat(embeddings)
@@ -194,27 +222,30 @@ def process_emb(texts, answer, model_id, index):
 
     return pd.DataFrame(data, columns=columns)
 
-def emb_top_feat(model, dataset, index, create = False):
+
+def emb_top_feat(model, dataset, layer, create = False):
     # get labels for model
     model_name, model_id, model_short  = topo.which_model(model)
 
     # labels for dataset
     data_name, data_csv = topo.data_label(dataset)
     questions = pd.read_csv(data_csv)
-    
-    tda_path = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpret/{model_short}/{model_short}_{data_name}_tda_{index}.csv")
 
+    tda_path = os.path.expanduser(f"~/TDA_RI/TDA_reason-interpret/{model_short}/{model_short}_{data_name}_tda_{layer}.csv")
+ 
     # either create or load data
     if create:
         feats_sen = questions["prompt"]
         answer = []
         if data_name == "hellaswag":
             answer = questions["label"]
+        elif data_name == "mcqa":
+            answer = questions["alternative"]
         else:
             answer = questions["answer"]
-        feats_tda = process_emb(feats_sen, answer, model_id, index)
+        feats_tda = process_emb(feats_sen, answer, model_id, layer)
         feats_tda.to_csv(tda_path, index=False)
-        print(f"Added questions from {data_name} for {model_short}! (layer {index})")
+        print(f"Added questions from {data_name} for {model_short}! (layer {layer})")
    
     else:
         feats_tda = pd.read_csv(tda_path)
