@@ -79,12 +79,17 @@ def which_model(model):
 
 # check if answer is correct
 def evaluate_model(real_answer, llm_answer):
-    if real_answer.isalpha():
+    if isinstance(real_answer, str) and real_answer.isalpha():
         real_answer = ord(real_answer) - ord('A')
     correct_index = int(real_answer)
-    match = re.search(r"Answer:\s*([A-D])|([A-D])\s*$", llm_answer.strip(), re.IGNORECASE)
+    # match = re.search(r"Answer:\s*([A-D])|([A-D])\s*$", llm_answer.strip(), re.IGNORECASE)
+    # match = re.search(r'\b([A-D])\b', answer.upper())
+    # match = re.search(r'(?:^\s*([A-D])\s*[.)])|(?:answer\s*:\s*([A-D]))', llm_answer.strip(), re.IGNORECASE)
+    # match = re.search(r'^\s*([A-D])\s*(?:[.)]\s*)?(?:(?:Explanation|Reasoning|Rationale)\s*:)?', llm_answer.strip(), re.IGNORECASE)
+    match = re.search(r'(?:Answer\s*:\s*([A-D]))|^\s*([A-D])\s*[.)]?', llm_answer.strip(), re.IGNORECASE)
     
     if match:
+        # answer = next(g for g in match.groups() if g).upper()
         extracted = (match.group(1) or match.group(2)).upper()
         predicted_index = ord(extracted) - ord('A')
     else:
