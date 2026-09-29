@@ -79,6 +79,8 @@ def which_model(model):
 
 # check if answer is correct
 def evaluate_model(real_answer, llm_answer):
+    if real_answer.isalpha():
+        real_answer = ord(real_answer) - ord('A')
     correct_index = int(real_answer)
     match = re.search(r"Answer:\s*([A-D])|([A-D])\s*$", llm_answer.strip(), re.IGNORECASE)
     
