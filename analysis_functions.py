@@ -83,11 +83,14 @@ def evaluate_model(real_answer, llm_answer, likelihood=""):
     if isinstance(real_answer, str) and real_answer.isalpha():
         real_answer = ord(real_answer) - ord('A')
     correct_index = int(real_answer)
+
+    log_index = ord(likelihood) - ord('A')
+    correctness = (log_index == correct_index)
+        
     # match = re.search(r"Answer:\s*([A-D])|([A-D])\s*$", llm_answer.strip(), re.IGNORECASE)
     # match = re.search(r'\b([A-D])\b', answer.upper())
     # match = re.search(r'(?:^\s*([A-D])\s*[.)])|(?:answer\s*:\s*([A-D]))', llm_answer.strip(), re.IGNORECASE)
     # match = re.search(r'^\s*([A-D])\s*(?:[.)]\s*)?(?:(?:Explanation|Reasoning|Rationale)\s*:)?', llm_answer.strip(), re.IGNORECASE)
-    
     match = re.search(r'(?:Answer\s*:\s*([A-D]))|^\s*([A-D])\s*[.)]?', llm_answer.strip(), re.IGNORECASE)
     
     if match:
@@ -100,13 +103,7 @@ def evaluate_model(real_answer, llm_answer, likelihood=""):
             predicted_index = int(cleaned)
         else:
             # raise ValueError(f"Expected A/B/C/D or 0/1/2/3, got: {llm_answer!r}")
-            return False
-    
-    if likelihood == "":
-        correctness = (predicted_index == correct_index)
-    else:
-        log_index = ord(likelihood) - ord('A')
-        correctness = (log_index == correct_index)
+            return correctness, False
         
     gen_correct = (predicted_index == correct_index)
     
