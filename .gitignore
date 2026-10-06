@@ -1,0 +1,3 @@
+# ignore CSV files only inside specific directories
+**/att_map/*.csv
+testing_creating.ipynb
